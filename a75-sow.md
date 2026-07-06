@@ -7,5 +7,7 @@ The expected result should be a set of sized tasks that will cover all the requi
 
 ## grpc-go scope of work
 
+### Impacted features
 
-
+- [A37](https://github.com/grpc/proposal/blob/master/A37-xds-aggregate-and-logical-dns-clusters.md) Aggregate cluster implementation assumptions are wrong
+- [A50](https://github.com/grpc/proposal/blob/master/A50-xds-outlier-detection.md) Outlier detection 
