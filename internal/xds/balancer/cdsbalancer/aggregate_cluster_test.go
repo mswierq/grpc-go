@@ -27,9 +27,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/internal/pretty"
+	iserviceconfig "google.golang.org/grpc/internal/serviceconfig"
 	"google.golang.org/grpc/internal/stubserver"
 	"google.golang.org/grpc/internal/testutils"
 	"google.golang.org/grpc/internal/testutils/xds/e2e"
+	"google.golang.org/grpc/internal/xds/balancer/outlierdetection"
 	"google.golang.org/grpc/internal/xds/balancer/priority"
 	"google.golang.org/grpc/internal/xds/xdsclient/xdsresource/version"
 	"google.golang.org/grpc/resolver"
@@ -105,15 +107,15 @@ func (s) TestAggregateClusterSuccess_LeafNode(t *testing.T) {
 			name:                  "eds",
 			firstClusterResource:  e2e.DefaultCluster(clusterName, serviceName, e2e.SecurityLevelNone),
 			secondClusterResource: e2e.DefaultCluster(clusterName, serviceName+"-new", e2e.SecurityLevelNone),
-			wantFirstChildCfg:     createSingleClusterConfig(clusterName, "priority-0-0", true),
-			wantSecondChildCfg:    createSingleClusterConfig(clusterName, "priority-1-0", true),
+			wantFirstChildCfg:     createLeafClusterConfig(clusterName, "priority-0-0", true),
+			wantSecondChildCfg:    createLeafClusterConfig(clusterName, "priority-1-0", true),
 		},
 		{
 			name:                  "dns",
 			firstClusterResource:  makeLogicalDNSClusterResource(clusterName, "dns_host", uint32(port)),
 			secondClusterResource: makeLogicalDNSClusterResource(clusterName, "dns_host_new", uint32(port)),
-			wantFirstChildCfg:     createSingleClusterConfig(clusterName, "priority-0", false),
-			wantSecondChildCfg:    createSingleClusterConfig(clusterName, "priority-1", false),
+			wantFirstChildCfg:     createLeafClusterConfig(clusterName, "priority-0", false),
+			wantSecondChildCfg:    createLeafClusterConfig(clusterName, "priority-1", false),
 		},
 	}
 
@@ -207,13 +209,22 @@ func (s) TestAggregateClusterSuccess_ThenUpdateChildClusters(t *testing.T) {
 
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(edsClusterName),
+			edsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(edsClusterName, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
-			"priority-1": {Config: createPriorityConfig(dnsClusterName)},
+			dnsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(dnsClusterName, "priority-1", false),
+				},
+				IgnoreReresolutionRequests: false,
+			},
 		},
-		Priorities: []string{"priority-0-0", "priority-1"},
+		Priorities: []string{edsClusterName, dnsClusterName},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -240,13 +251,22 @@ func (s) TestAggregateClusterSuccess_ThenUpdateChildClusters(t *testing.T) {
 
 	wantChildCfg = &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(edsClusterName),
+			edsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(edsClusterName, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
-			"priority-2": {Config: createPriorityConfig(dnsClusterNameNew)},
+			dnsClusterNameNew: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(dnsClusterNameNew, "priority-2", false),
+				},
+				IgnoreReresolutionRequests: false,
+			},
 		},
-		Priorities: []string{"priority-0-0", "priority-2"},
+		Priorities: []string{edsClusterName, dnsClusterNameNew},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -288,13 +308,22 @@ func (s) TestAggregateClusterSuccess_ThenChangeRootToEDS(t *testing.T) {
 
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(edsClusterName),
+			edsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(edsClusterName, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
-			"priority-1": {Config: createPriorityConfig(dnsClusterName)},
+			dnsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(dnsClusterName, "priority-1", false),
+				},
+				IgnoreReresolutionRequests: false,
+			},
 		},
-		Priorities: []string{"priority-0-0", "priority-1"},
+		Priorities: []string{edsClusterName, dnsClusterName},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -319,7 +348,7 @@ func (s) TestAggregateClusterSuccess_ThenChangeRootToEDS(t *testing.T) {
 	}
 	// Since the service name of the EDS cluster remains same, same priority name
 	// is used.
-	wantSingleChildCfg := createSingleClusterConfig(clusterName, "priority-0-0", true)
+	wantSingleChildCfg := createLeafClusterConfig(clusterName, "priority-0-0", true)
 	if err := compareLoadBalancingConfig(ctx, odCfgCh, wantSingleChildCfg); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +377,7 @@ func (s) TestAggregatedClusterSuccess_SwitchBetweenLeafAndAggregate(t *testing.T
 	if err := mgmtServer.Update(ctx, resources); err != nil {
 		t.Fatal(err)
 	}
-	wantSingleChildCfg := createSingleClusterConfig(clusterName, "priority-0-0", true)
+	wantSingleChildCfg := createLeafClusterConfig(clusterName, "priority-0-0", true)
 	if err := compareLoadBalancingConfig(ctx, odCfgCh, wantSingleChildCfg); err != nil {
 		t.Fatal(err)
 	}
@@ -373,13 +402,22 @@ func (s) TestAggregatedClusterSuccess_SwitchBetweenLeafAndAggregate(t *testing.T
 
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(edsClusterName),
+			edsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(edsClusterName, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
-			"priority-1": {Config: createPriorityConfig(dnsClusterName)},
+			dnsClusterName: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(dnsClusterName, "priority-1", false),
+				},
+				IgnoreReresolutionRequests: false,
+			},
 		},
-		Priorities: []string{"priority-0-0", "priority-1"},
+		Priorities: []string{edsClusterName, dnsClusterName},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -551,12 +589,15 @@ func (s) TestAggregatedClusterSuccess_DiamondDependency(t *testing.T) {
 
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(clusterNameD),
+			clusterNameD: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(clusterNameD, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
 		},
-		Priorities: []string{"priority-0-0"},
+		Priorities: []string{clusterNameD},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -619,16 +660,22 @@ func (s) TestAggregatedClusterSuccess_IgnoreDups(t *testing.T) {
 
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(clusterNameC),
+			clusterNameC: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(clusterNameC, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
-			"priority-1-0": {
-				Config:                     createPriorityConfig(clusterNameD),
+			clusterNameD: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(clusterNameD, "priority-1-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
 		},
-		Priorities: []string{"priority-0-0", "priority-1-0"},
+		Priorities: []string{clusterNameC, clusterNameD},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -707,12 +754,15 @@ func (s) TestAggregatedCluster_NodeChildOfItself(t *testing.T) {
 	// Verify the configuration pushed to the child policy.
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(clusterNameB),
+			clusterNameB: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(clusterNameB, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
 		},
-		Priorities: []string{"priority-0-0"},
+		Priorities: []string{clusterNameB},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
@@ -816,12 +866,15 @@ func (s) TestAggregatedCluster_CycleWithLeafNode(t *testing.T) {
 	// Verify the configuration pushed to the child policy.
 	wantChildCfg := &priority.LBConfig{
 		Children: map[string]*priority.Child{
-			"priority-0-0": {
-				Config:                     createPriorityConfig(clusterNameC),
+			clusterNameC: {
+				Config: &iserviceconfig.BalancerConfig{
+					Name:   outlierdetection.Name,
+					Config: createLeafClusterConfig(clusterNameC, "priority-0-0", true),
+				},
 				IgnoreReresolutionRequests: true,
 			},
 		},
-		Priorities: []string{"priority-0-0"},
+		Priorities: []string{clusterNameC},
 	}
 	if err := compareLoadBalancingConfig(ctx, lbCfgCh, wantChildCfg); err != nil {
 		t.Fatal(err)
