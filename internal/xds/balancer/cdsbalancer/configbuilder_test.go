@@ -167,7 +167,7 @@ func (s) TestBuildAggregateClusterConfigJSON(t *testing.T) {
 					},
 				},
 			},
-			childNameGen: newNameGenerator(0),
+			childNameGen: newNameGenerator(),
 		},
 		{
 			clusterConfig: &xdsresource.ClusterConfig{
@@ -178,7 +178,7 @@ func (s) TestBuildAggregateClusterConfigJSON(t *testing.T) {
 					DNSEndpoints: &xdsresource.DNSUpdate{Endpoints: []resolver.Endpoint{makeResolverEndpoint(4, 0), makeResolverEndpoint(4, 1)}},
 				},
 			},
-			childNameGen: newNameGenerator(1),
+			childNameGen: newNameGenerator(),
 		},
 	}, nil)
 	if err != nil {
@@ -227,7 +227,7 @@ func (s) TestBuildAggregateClusterConfig(t *testing.T) {
 				},
 			},
 			outlierDetection: noopODCfg,
-			childNameGen:     newNameGenerator(0),
+			childNameGen:     newNameGenerator(),
 		},
 		{
 			// This OD config should wrap the Logical DNS priorities balancer.
@@ -243,7 +243,7 @@ func (s) TestBuildAggregateClusterConfig(t *testing.T) {
 				},
 			},
 			outlierDetection: noopODCfg,
-			childNameGen:     newNameGenerator(1),
+			childNameGen:     newNameGenerator(),
 		},
 	}, nil)
 
@@ -256,16 +256,16 @@ func (s) TestBuildAggregateClusterConfig(t *testing.T) {
 				Name: priority.Name,
 				Config: &priority.LBConfig{
 					Children: map[string]*priority.Child{
-						"priority-0-0": {
+						"child0": {
 							Config:                     nil,
 							IgnoreReresolutionRequests: true,
 						},
-						"priority-0-1": {
+						"child1": {
 							Config:                     nil,
 							IgnoreReresolutionRequests: true,
 						},
 					},
-					Priorities: []string{"priority-0-0", "priority-0-1"},
+					Priorities: []string{"child0", "child1"},
 				},
 			},
 		},
@@ -280,12 +280,12 @@ func (s) TestBuildAggregateClusterConfig(t *testing.T) {
 				Name: priority.Name,
 				Config: &priority.LBConfig{
 					Children: map[string]*priority.Child{
-						"priority-1": {
+						"child0": {
 							Config:                     nil,
 							IgnoreReresolutionRequests: false,
 						},
 					},
-					Priorities: []string{"priority-1"},
+					Priorities: []string{"child0"},
 				},
 			},
 		},
@@ -360,7 +360,7 @@ func (s) TestBuildLeafClusterConfigJSON(t *testing.T) {
 			},
 		},
 		outlierDetection: noopODCfg,
-		childNameGen:     newNameGenerator(0),
+		childNameGen:     newNameGenerator(),
 	}, &iserviceconfig.BalancerConfig{Name: roundrobin.Name})
 	if err != nil {
 		t.Fatalf("buildLeafClusterConfigJSON(...) failed: %v", err)
@@ -431,7 +431,7 @@ func (s) TestBuildLeafClusterConfig_DNS(t *testing.T) {
 						EndpointConfig: &xdsresource.EndpointConfig{DNSEndpoints: &xdsresource.DNSUpdate{Endpoints: tt.endpoints}},
 					},
 					outlierDetection: noopODCfg,
-					childNameGen:     newNameGenerator(3),
+					childNameGen:     newNameGenerator(),
 				},
 				tt.xdsLBPolicy)
 			if err != nil {
@@ -451,12 +451,12 @@ func (s) TestBuildLeafClusterConfig_DNS(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"priority-3": {
+									"child0": {
 										Config:                     tt.xdsLBPolicy,
 										IgnoreReresolutionRequests: false,
 									},
 								},
-								Priorities: []string{"priority-3"},
+								Priorities: []string{"child0"},
 							},
 						},
 					},
@@ -466,7 +466,7 @@ func (s) TestBuildLeafClusterConfig_DNS(t *testing.T) {
 				t.Errorf("buildLeafClusterConfig() config diff (-want +got) %v", diff)
 			}
 
-			wantEndpoints := []resolver.Endpoint{testEndpointForDNS(tt.endpoints, 1, []string{"priority-3", xdsinternal.LocalityString(clients.Locality{})})}
+			wantEndpoints := []resolver.Endpoint{testEndpointForDNS(tt.endpoints, 1, []string{"child0", xdsinternal.LocalityString(clients.Locality{})})}
 			if diff := cmp.Diff(wantEndpoints, gotEndpoints, endpointCmpOpts); diff != "" {
 				t.Errorf("buildLeafClusterConfig() endpoints diff (-want +got) %v", diff)
 			}
@@ -519,7 +519,7 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Disabled(t *t
 				},
 			},
 			outlierDetection: noopODCfg,
-			childNameGen:     newNameGenerator(2),
+			childNameGen:     newNameGenerator(),
 		},
 		nil,
 	)
@@ -540,14 +540,14 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Disabled(t *t
 					Name: priority.Name,
 					Config: &priority.LBConfig{
 						Children: map[string]*priority.Child{
-							"priority-2-0": {
+							"child0": {
 								IgnoreReresolutionRequests: true,
 							},
-							"priority-2-1": {
+							"child1": {
 								IgnoreReresolutionRequests: true,
 							},
 						},
-						Priorities: []string{"priority-2-0", "priority-2-1"},
+						Priorities: []string{"child0", "child1"},
 					},
 				},
 			},
@@ -555,14 +555,14 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Disabled(t *t
 	}
 	// Endpoint weight is the product of locality weight and endpoint weight.
 	wantEndpoints := []resolver.Endpoint{
-		testEndpointWithAttrs(loc0.Endpoints[0].ResolverEndpoint, 20, 20*1, "priority-2-0", &loc0.ID),
-		testEndpointWithAttrs(loc0.Endpoints[1].ResolverEndpoint, 20, 20*1, "priority-2-0", &loc0.ID),
-		testEndpointWithAttrs(loc1.Endpoints[0].ResolverEndpoint, 80, 80*1, "priority-2-0", &loc1.ID),
-		testEndpointWithAttrs(loc1.Endpoints[1].ResolverEndpoint, 80, 80*1, "priority-2-0", &loc1.ID),
-		testEndpointWithAttrs(loc2.Endpoints[0].ResolverEndpoint, 20, 20*1, "priority-2-1", &loc2.ID),
-		testEndpointWithAttrs(loc2.Endpoints[1].ResolverEndpoint, 20, 20*1, "priority-2-1", &loc2.ID),
-		testEndpointWithAttrs(loc3.Endpoints[0].ResolverEndpoint, 80, 80*1, "priority-2-1", &loc3.ID),
-		testEndpointWithAttrs(loc3.Endpoints[1].ResolverEndpoint, 80, 80*1, "priority-2-1", &loc3.ID),
+		testEndpointWithAttrs(loc0.Endpoints[0].ResolverEndpoint, 20, 20*1, "child0", &loc0.ID),
+		testEndpointWithAttrs(loc0.Endpoints[1].ResolverEndpoint, 20, 20*1, "child0", &loc0.ID),
+		testEndpointWithAttrs(loc1.Endpoints[0].ResolverEndpoint, 80, 80*1, "child0", &loc1.ID),
+		testEndpointWithAttrs(loc1.Endpoints[1].ResolverEndpoint, 80, 80*1, "child0", &loc1.ID),
+		testEndpointWithAttrs(loc2.Endpoints[0].ResolverEndpoint, 20, 20*1, "child1", &loc2.ID),
+		testEndpointWithAttrs(loc2.Endpoints[1].ResolverEndpoint, 20, 20*1, "child1", &loc2.ID),
+		testEndpointWithAttrs(loc3.Endpoints[0].ResolverEndpoint, 80, 80*1, "child1", &loc3.ID),
+		testEndpointWithAttrs(loc3.Endpoints[1].ResolverEndpoint, 80, 80*1, "child1", &loc3.ID),
 	}
 
 	if diff := cmp.Diff(wantODConfig, gotODConfig); diff != "" {
@@ -618,7 +618,7 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Enabled(t *te
 				},
 			},
 			outlierDetection: noopODCfg,
-			childNameGen:     newNameGenerator(2),
+			childNameGen:     newNameGenerator(),
 		},
 		nil,
 	)
@@ -639,14 +639,14 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Enabled(t *te
 					Name: priority.Name,
 					Config: &priority.LBConfig{
 						Children: map[string]*priority.Child{
-							"priority-2-0": {
+							"child0": {
 								IgnoreReresolutionRequests: true,
 							},
-							"priority-2-1": {
+							"child1": {
 								IgnoreReresolutionRequests: true,
 							},
 						},
-						Priorities: []string{"priority-2-0", "priority-2-1"},
+						Priorities: []string{"child0", "child1"},
 					},
 				},
 			},
@@ -671,14 +671,14 @@ func (s) TestBuildLeafClusterConfig_EDS_PickFirstWeightedShuffling_Enabled(t *te
 	//   1717986918 * 0.5 = 858993459, or,
 	//    429496729 * 0.5 = 214748364
 	wantEndpoints := []resolver.Endpoint{
-		testEndpointWithAttrs(loc0.Endpoints[0].ResolverEndpoint, 20, 214748364, "priority-2-0", &loc0.ID),
-		testEndpointWithAttrs(loc0.Endpoints[1].ResolverEndpoint, 20, 214748364, "priority-2-0", &loc0.ID),
-		testEndpointWithAttrs(loc1.Endpoints[0].ResolverEndpoint, 80, 858993459, "priority-2-0", &loc1.ID),
-		testEndpointWithAttrs(loc1.Endpoints[1].ResolverEndpoint, 80, 858993459, "priority-2-0", &loc1.ID),
-		testEndpointWithAttrs(loc2.Endpoints[0].ResolverEndpoint, 20, 214748364, "priority-2-1", &loc2.ID),
-		testEndpointWithAttrs(loc2.Endpoints[1].ResolverEndpoint, 20, 214748364, "priority-2-1", &loc2.ID),
-		testEndpointWithAttrs(loc3.Endpoints[0].ResolverEndpoint, 80, 858993459, "priority-2-1", &loc3.ID),
-		testEndpointWithAttrs(loc3.Endpoints[1].ResolverEndpoint, 80, 858993459, "priority-2-1", &loc3.ID),
+		testEndpointWithAttrs(loc0.Endpoints[0].ResolverEndpoint, 20, 214748364, "child0", &loc0.ID),
+		testEndpointWithAttrs(loc0.Endpoints[1].ResolverEndpoint, 20, 214748364, "child0", &loc0.ID),
+		testEndpointWithAttrs(loc1.Endpoints[0].ResolverEndpoint, 80, 858993459, "child0", &loc1.ID),
+		testEndpointWithAttrs(loc1.Endpoints[1].ResolverEndpoint, 80, 858993459, "child0", &loc1.ID),
+		testEndpointWithAttrs(loc2.Endpoints[0].ResolverEndpoint, 20, 214748364, "child1", &loc2.ID),
+		testEndpointWithAttrs(loc2.Endpoints[1].ResolverEndpoint, 20, 214748364, "child1", &loc2.ID),
+		testEndpointWithAttrs(loc3.Endpoints[0].ResolverEndpoint, 80, 858993459, "child1", &loc3.ID),
+		testEndpointWithAttrs(loc3.Endpoints[1].ResolverEndpoint, 80, 858993459, "child1", &loc3.ID),
 	}
 
 	if diff := cmp.Diff(wantODConfig, gotODConfig); diff != "" {
@@ -704,7 +704,7 @@ func (s) TestBuildLeafClusterConfig_NilChecks(t *testing.T) {
 		},
 		{
 			name: "nil clusterConfig",
-			p:    &priorityConfig{childNameGen: newNameGenerator(0)},
+			p:    &priorityConfig{childNameGen: newNameGenerator()},
 		},
 		{
 			name: "nil childNameGen",
@@ -717,14 +717,14 @@ func (s) TestBuildLeafClusterConfig_NilChecks(t *testing.T) {
 		{
 			name: "nil Cluster in clusterConfig",
 			p: &priorityConfig{
-				childNameGen:  newNameGenerator(0),
+				childNameGen:  newNameGenerator(),
 				clusterConfig: &xdsresource.ClusterConfig{},
 			},
 		},
 		{
 			name: "EDS with nil EndpointConfig",
 			p: &priorityConfig{
-				childNameGen: newNameGenerator(0),
+				childNameGen: newNameGenerator(),
 				clusterConfig: &xdsresource.ClusterConfig{
 					Cluster: &xdsresource.ClusterUpdate{ClusterType: xdsresource.ClusterTypeEDS},
 				},
@@ -733,7 +733,7 @@ func (s) TestBuildLeafClusterConfig_NilChecks(t *testing.T) {
 		{
 			name: "EDS with nil EDSUpdate",
 			p: &priorityConfig{
-				childNameGen: newNameGenerator(0),
+				childNameGen: newNameGenerator(),
 				clusterConfig: &xdsresource.ClusterConfig{
 					Cluster:        &xdsresource.ClusterUpdate{ClusterType: xdsresource.ClusterTypeEDS},
 					EndpointConfig: &xdsresource.EndpointConfig{},
@@ -743,7 +743,7 @@ func (s) TestBuildLeafClusterConfig_NilChecks(t *testing.T) {
 		{
 			name: "LogicalDNS with nil EndpointConfig",
 			p: &priorityConfig{
-				childNameGen: newNameGenerator(0),
+				childNameGen: newNameGenerator(),
 				clusterConfig: &xdsresource.ClusterConfig{
 					Cluster: &xdsresource.ClusterUpdate{ClusterType: xdsresource.ClusterTypeLogicalDNS},
 				},
@@ -752,7 +752,7 @@ func (s) TestBuildLeafClusterConfig_NilChecks(t *testing.T) {
 		{
 			name: "LogicalDNS with nil DNSEndpoints",
 			p: &priorityConfig{
-				childNameGen: newNameGenerator(0),
+				childNameGen: newNameGenerator(),
 				clusterConfig: &xdsresource.ClusterConfig{
 					Cluster:        &xdsresource.ClusterUpdate{ClusterType: xdsresource.ClusterTypeLogicalDNS},
 					EndpointConfig: &xdsresource.EndpointConfig{},
@@ -1212,7 +1212,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.1:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.5:443"}),
 						},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "testzone-1"},
+					1, 2147483648, "child0", &clients.Locality{SubZone: "testzone-1"},
 				),
 			},
 			wantConnectAddr: []string{"10.0.0.5:443"},
@@ -1250,7 +1250,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.1:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.5:443"}),
 						},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 2147483648, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 			},
 			wantConnectAddr: []string{"10.0.0.5:443"},
@@ -1291,7 +1291,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 					resolver.Endpoint{
 						Addresses: []resolver.Address{proxyattributes.Set(resolver.Address{Addr: "192.168.1.1:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.5:443"})},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "subzone-1"}),
+					1, 2147483648, "child0", &clients.Locality{SubZone: "subzone-1"}),
 			},
 			wantConnectAddr: []string{"10.0.0.5:443"},
 		},
@@ -1344,13 +1344,13 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 					resolver.Endpoint{
 						Addresses: []resolver.Address{proxyattributes.Set(resolver.Address{Addr: "192.168.1.1:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.5:443"})},
 					},
-					1, 1073741824, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 1073741824, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 				testEndpointWithAttrs(
 					resolver.Endpoint{
 						Addresses: []resolver.Address{proxyattributes.Set(resolver.Address{Addr: "192.168.1.2:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.6:443"})},
 					},
-					1, 1073741824, "priority-0", &clients.Locality{SubZone: "subzone-2"},
+					1, 1073741824, "child0", &clients.Locality{SubZone: "subzone-2"},
 				),
 			},
 			wantConnectAddr: []string{"10.0.0.5:443", "10.0.0.6:443"},
@@ -1430,7 +1430,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.1:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.5:443"}),
 						},
 					},
-					1, 536870912, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 536870912, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 				testEndpointWithAttrs(
 					resolver.Endpoint{
@@ -1438,7 +1438,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.2:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.6:443"}),
 						},
 					},
-					1, 536870912, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 536870912, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 				testEndpointWithAttrs(
 					resolver.Endpoint{
@@ -1446,7 +1446,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.3:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.7:443"}),
 						},
 					},
-					1, 536870912, "priority-0", &clients.Locality{SubZone: "subzone-2"},
+					1, 536870912, "child0", &clients.Locality{SubZone: "subzone-2"},
 				),
 				testEndpointWithAttrs(
 					resolver.Endpoint{
@@ -1454,7 +1454,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 							proxyattributes.Set(resolver.Address{Addr: "192.168.1.4:8080"}, proxyattributes.Options{ConnectAddr: "10.0.0.8:443"}),
 						},
 					},
-					1, 536870912, "priority-0", &clients.Locality{SubZone: "subzone-2"},
+					1, 536870912, "child0", &clients.Locality{SubZone: "subzone-2"},
 				),
 			},
 			wantConnectAddr: []string{"10.0.0.5:443", "10.0.0.6:443", "10.0.0.7:443", "10.0.0.8:443"},
@@ -1485,7 +1485,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 					resolver.Endpoint{
 						Addresses: []resolver.Address{{Addr: "10.0.0.5:443"}},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 2147483648, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 			},
 			wantConnectAddr: []string{},
@@ -1519,7 +1519,7 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 					resolver.Endpoint{
 						Addresses: []resolver.Address{{Addr: "10.0.0.5:443"}},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "subzone-1"},
+					1, 2147483648, "child0", &clients.Locality{SubZone: "subzone-1"},
 				),
 			},
 		},
@@ -1554,14 +1554,14 @@ func (s) TestPriorityLocalitiesToClusterImpl_HTTP11Proxy(t *testing.T) {
 					resolver.Endpoint{
 						Addresses: []resolver.Address{{Addr: "10.0.0.5:443"}},
 					},
-					1, 2147483648, "priority-0", &clients.Locality{SubZone: "testzone-1"},
+					1, 2147483648, "child0", &clients.Locality{SubZone: "testzone-1"},
 				),
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, retEndpoints, err := priorityLocalitiesToClusterImpl(tt.localities, "priority-0", tt.clusterUpdate, nil)
+			_, retEndpoints, err := priorityLocalitiesToClusterImpl(tt.localities, "child0", tt.clusterUpdate, nil)
 			if err != nil {
 				t.Fatalf("priorityLocalitiesToClusterImpl() failed: %v", err)
 			}

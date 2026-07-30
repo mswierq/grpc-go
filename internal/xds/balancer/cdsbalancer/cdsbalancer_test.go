@@ -486,7 +486,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"priority-0-0": {
+									"child0": {
 										Config: &iserviceconfig.BalancerConfig{
 											Name:   wrrlocality.Name,
 											Config: &wrrlocality.LBConfig{ChildPolicy: &iserviceconfig.BalancerConfig{Name: roundrobin.Name}},
@@ -494,7 +494,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"priority-0-0"},
+								Priorities: []string{"child0"},
 							},
 						},
 					},
@@ -531,7 +531,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"priority-0-0": {
+									"child0": {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -542,7 +542,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"priority-0-0"},
+								Priorities: []string{"child0"},
 							},
 						},
 					},
@@ -580,7 +580,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"priority-0-0": {
+									"child0": {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -591,7 +591,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"priority-0-0"},
+								Priorities: []string{"child0"},
 							},
 						},
 					},
@@ -648,7 +648,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"priority-0-0": {
+									"child0": {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -659,7 +659,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"priority-0-0"},
+								Priorities: []string{"child0"},
 							},
 						},
 					},

@@ -387,7 +387,7 @@ func (s) TestOutlierDetectionConfigPropagationToChildPolicy(t *testing.T) {
 					Name: priority.Name,
 					Config: &priority.LBConfig{
 						Children: map[string]*priority.Child{
-							"priority-0-0": {
+							"child0": {
 								Config: &iserviceconfig.BalancerConfig{
 									Name: wrrlocality.Name,
 									Config: &wrrlocality.LBConfig{
@@ -399,7 +399,7 @@ func (s) TestOutlierDetectionConfigPropagationToChildPolicy(t *testing.T) {
 								IgnoreReresolutionRequests: true,
 							},
 						},
-						Priorities: []string{"priority-0-0"},
+						Priorities: []string{"child0"},
 					},
 				},
 			},

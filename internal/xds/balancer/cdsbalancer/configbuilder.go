@@ -153,7 +153,7 @@ func buildLeafClusterConfig(p *priorityConfig, xdsLBPolicy *internalserviceconfi
 			}
 		}
 	case xdsresource.ClusterTypeLogicalDNS:
-		pName := fmt.Sprintf("priority-%v", p.childNameGen.prefix)
+		pName := "child0"
 		priorityLBConfig.Priorities = []string{pName}
 		if p.clusterConfig.EndpointConfig == nil || p.clusterConfig.EndpointConfig.DNSEndpoints == nil {
 			return nil, nil, fmt.Errorf("DNS endpoints are missing for cluster %q", clusterUpdate.ClusterName)

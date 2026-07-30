@@ -149,10 +149,6 @@ type cdsBalancer struct {
 	xdsLBPolicy       internalserviceconfig.BalancerConfig  // Stores the locality and endpoint picking policy.
 	attributes        *attributes.Attributes                // Attributes from resolver state.
 	serviceConfig     *serviceconfig.ParseResult
-	// Each new leaf cluster needs a child name generator to reuse child policy
-	// names. But to make sure the names across leaf clusters doesn't conflict,
-	// we need a seq ID. This ID is incremented for each new cluster.
-	childNameGeneratorSeqID uint64
 }
 
 // UpdateClientConnState receives the serviceConfig, xdsConfig,
@@ -360,13 +356,9 @@ func (b *cdsBalancer) updatePriorityConfig(clusterName string, clusterConfig *xd
 	pc, ok := b.priorityConfigs[name]
 	if !ok {
 		pc = &priorityConfig{
-			childNameGen: newNameGenerator(b.childNameGeneratorSeqID),
+			childNameGen: newNameGenerator(),
 		}
 		b.priorityConfigs[name] = pc
-		// Increment the seq ID for the next new cluster. This is done to make
-		// sure that the child policy names generated for different clusters
-		// don't conflict with each other.
-		b.childNameGeneratorSeqID++
 	}
 	pc.clusterConfig = clusterConfig
 	return pc

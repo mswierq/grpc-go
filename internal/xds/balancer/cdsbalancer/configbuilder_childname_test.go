@@ -27,16 +27,14 @@ import (
 
 func (s) Test_nameGenerator_generate(t *testing.T) {
 	tests := []struct {
-		name   string
-		prefix uint64
-		steps  []struct {
+		name  string
+		steps []struct {
 			input [][]xdsresource.Locality
 			want  []string
 		}
 	}{
 		{
-			name:   "init, two new priorities",
-			prefix: 3,
+			name: "init, two new priorities",
 			steps: []struct {
 				input [][]xdsresource.Locality
 				want  []string
@@ -46,13 +44,12 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-3-0", "priority-3-1"},
+					want: []string{"child0", "child1"},
 				},
 			},
 		},
 		{
-			name:   "one new priority",
-			prefix: 1,
+			name: "one new priority",
 			steps: []struct {
 				input [][]xdsresource.Locality
 				want  []string
@@ -61,20 +58,19 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}},
 					},
-					want: []string{"priority-1-0"},
+					want: []string{"child0"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-1-0", "priority-1-1"},
+					want: []string{"child0", "child1"},
 				},
 			},
 		},
 		{
-			name:   "merge two priorities",
-			prefix: 4,
+			name: "merge two priorities",
 			steps: []struct {
 				input [][]xdsresource.Locality
 				want  []string
@@ -85,14 +81,14 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-4-0", "priority-4-1", "priority-4-2"},
+					want: []string{"child0", "child1", "child2"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-4-0", "priority-4-2"},
+					want: []string{"child0", "child2"},
 				},
 			},
 		},
@@ -108,7 +104,7 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1", "priority-0-2"},
+					want: []string{"child0", "child1", "child2"},
 				},
 				{
 					input: [][]xdsresource.Locality{
@@ -116,7 +112,7 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-0-1", "priority-0-0", "priority-0-2"},
+					want: []string{"child1", "child0", "child2"},
 				},
 			},
 		},
@@ -131,7 +127,7 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
@@ -139,7 +135,7 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-2", "priority-0-1"},
+					want: []string{"child0", "child2", "child1"},
 				},
 			},
 		},
@@ -154,13 +150,13 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L1"}}, {ID: clients.Locality{Zone: "L0"}}},
 					},
-					want: []string{"priority-0-0"},
+					want: []string{"child0"},
 				},
 			},
 		},
@@ -175,21 +171,21 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}, {ID: clients.Locality{Zone: "L2"}}},
 						{{ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 			},
 		},
@@ -204,14 +200,14 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L2"}}},
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-0-1", "priority-0-0"},
+					want: []string{"child1", "child0"},
 				},
 			},
 		},
@@ -226,14 +222,14 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L2"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}},
 						{{ID: clients.Locality{Zone: "L5"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-2"},
+					want: []string{"child0", "child2"},
 				},
 			},
 		},
@@ -248,21 +244,21 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L1"}}, {ID: clients.Locality{Zone: "L2"}}},
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L1"}}, {ID: clients.Locality{Zone: "L2"}}},
 						{{ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L1"}}, {ID: clients.Locality{Zone: "L2"}}},
 						{{ID: clients.Locality{Zone: "L0"}}, {ID: clients.Locality{Zone: "L3"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 			},
 		},
@@ -277,7 +273,7 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
@@ -285,21 +281,21 @@ func (s) Test_nameGenerator_generate(t *testing.T) {
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-0-2", "priority-0-0", "priority-0-1"},
+					want: []string{"child2", "child0", "child1"},
 				},
 				{
 					input: [][]xdsresource.Locality{
 						{{ID: clients.Locality{Zone: "L0"}}},
 						{{ID: clients.Locality{Zone: "L1"}}},
 					},
-					want: []string{"priority-0-0", "priority-0-1"},
+					want: []string{"child0", "child1"},
 				},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ng := newNameGenerator(tt.prefix)
+			ng := newNameGenerator()
 			for i, step := range tt.steps {
 				got := ng.generate(step.input)
 				if diff := cmp.Diff(got, step.want); diff != "" {
