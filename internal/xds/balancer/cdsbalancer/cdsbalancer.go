@@ -236,13 +236,13 @@ func (b *cdsBalancer) handleClusterUpdate() error {
 	var newPriorities []*priorityConfig
 	switch clusterConfig.Cluster.ClusterType {
 	case xdsresource.ClusterTypeEDS, xdsresource.ClusterTypeLogicalDNS:
-		p := b.updatePriorityConfig(clusterName, &clusterConfig)
+		p := b.updatePriorityConfig(&clusterConfig)
 		newPriorities = append(newPriorities, p)
 	case xdsresource.ClusterTypeAggregate:
 		for _, leaf := range clusterConfig.AggregateConfig.LeafClusters {
 			leafCluster := b.clusterConfigs[leaf]
 			// Update priority config for leaf clusters.
-			p := b.updatePriorityConfig(leaf, &leafCluster.Config)
+			p := b.updatePriorityConfig(&leafCluster.Config)
 			newPriorities = append(newPriorities, p)
 		}
 	}
@@ -351,15 +351,15 @@ func (b *cdsBalancer) updateChildConfig() error {
 
 // updatePriorityConfig updates the priority configuration for the specified EDS
 // or DNS cluster, creating it if it does not already exist.
-func (b *cdsBalancer) updatePriorityConfig(clusterName string, clusterConfig *xdsresource.ClusterConfig) *priorityConfig {
-	name := hostName(clusterName, *clusterConfig.Cluster)
+func (b *cdsBalancer) updatePriorityConfig(clusterConfig *xdsresource.ClusterConfig) *priorityConfig {
+	clusterName := clusterConfig.Cluster.ClusterName
+	name := hostName(*clusterConfig.Cluster)
 	pc, ok := b.priorityConfigs[name]
 	if !ok {
-		pc = &priorityConfig{
-			childNameGen: newNameGenerator(),
-		}
+		pc = &priorityConfig{}
 		b.priorityConfigs[name] = pc
 	}
+	pc.childNameGen = newNameGenerator(clusterName)
 	pc.clusterConfig = clusterConfig
 	return pc
 }

@@ -64,13 +64,13 @@ type priorityConfig struct {
 //
 // For EDS, it's the EDSServiceName (or ClusterName if empty).
 // For DNS, it's the DNSHostName.
-func hostName(clusterName string, update xdsresource.ClusterUpdate) string {
+func hostName(update xdsresource.ClusterUpdate) string {
 	switch update.ClusterType {
 	case xdsresource.ClusterTypeEDS:
 		if update.EDSServiceName != "" {
 			return update.EDSServiceName
 		}
-		return clusterName
+		return update.ClusterName
 	case xdsresource.ClusterTypeLogicalDNS:
 		return update.DNSHostName
 	default:
@@ -153,7 +153,7 @@ func buildLeafClusterConfig(p *priorityConfig, xdsLBPolicy *internalserviceconfi
 			}
 		}
 	case xdsresource.ClusterTypeLogicalDNS:
-		pName := "child0"
+		pName := fmt.Sprintf("{cluster=%s, child_number=0}", clusterUpdate.ClusterName)
 		priorityLBConfig.Priorities = []string{pName}
 		if p.clusterConfig.EndpointConfig == nil || p.clusterConfig.EndpointConfig.DNSEndpoints == nil {
 			return nil, nil, fmt.Errorf("DNS endpoints are missing for cluster %q", clusterUpdate.ClusterName)

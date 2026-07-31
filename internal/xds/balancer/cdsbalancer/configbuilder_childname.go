@@ -31,13 +31,14 @@ import (
 // struct keeps state between generate() calls, and a later generate() might
 // return names returned by the previous call.
 type nameGenerator struct {
+	clusterName                string
 	prevLocalitiesToChildNames map[clients.Locality]string // locality to child name mapping generated for the previous update
 	prevChildNames             []string                    // prioritized list of child names generated for the previous update
 	nextID                     uint64
 }
 
-func newNameGenerator() *nameGenerator {
-	return &nameGenerator{}
+func newNameGenerator(clusterName string) *nameGenerator {
+	return &nameGenerator{clusterName: clusterName}
 }
 
 // generate returns a list of names for the given list of priorities.
@@ -48,10 +49,10 @@ func newNameGenerator() *nameGenerator {
 // - if no reusable name is found for this priority, a new name is generated
 //
 // For example:
-// - update 1: [[L1], [L2], [L3]] --> ["child0", "child1", "child2"]
-// - update 2: [[L1], [L2], [L3]] --> ["child0", "child1", "child2"]
-// - update 3: [[L1, L2], [L3]] --> ["child0", "child2"]   (Two priorities were merged)
-// - update 4: [[L1], [L4]] --> ["child0", "child3"]      (A priority was split, and a new priority was added)
+// - update 1: [[L1], [L2], [L3]] --> ["{cluster=cluster1, child_number=0}", "{cluster=cluster1, child_number=1}", "{cluster=cluster1, child_number=2}"]
+// - update 2: [[L1], [L2], [L3]] --> ["{cluster=cluster1, child_number=0}", "{cluster=cluster1, child_number=1}", "{cluster=cluster1, child_number=2}"]
+// - update 3: [[L1, L2], [L3]] --> ["{cluster=cluster1, child_number=0}", "{cluster=cluster1, child_number=2}"]   (Two priorities were merged)
+// - update 4: [[L1], [L4]] --> ["{cluster=cluster1, child_number=0}", "{cluster=cluster1, child_number=3}"]      (A priority was split, and a new priority was added)
 func (ng *nameGenerator) generate(priorities [][]xdsresource.Locality) []string {
 	ret := make([]string, len(priorities))
 	usedNames := make(map[string]bool)
@@ -91,7 +92,7 @@ func (ng *nameGenerator) generate(priorities [][]xdsresource.Locality) []string 
 	// Pass 3: New name.
 	for i, name := range ret {
 		if name == "" {
-			newID := fmt.Sprintf("child%d", ng.nextID)
+			newID := fmt.Sprintf("{cluster=%s, child_number=%d}", ng.clusterName, ng.nextID)
 			ng.nextID++
 			ret[i] = newID
 			usedNames[newID] = true

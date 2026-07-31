@@ -387,7 +387,7 @@ func (s) TestOutlierDetectionConfigPropagationToChildPolicy(t *testing.T) {
 					Name: priority.Name,
 					Config: &priority.LBConfig{
 						Children: map[string]*priority.Child{
-							"child0": {
+							fmt.Sprintf("{cluster=%s, child_number=0}", clusterName): {
 								Config: &iserviceconfig.BalancerConfig{
 									Name: wrrlocality.Name,
 									Config: &wrrlocality.LBConfig{
@@ -399,7 +399,7 @@ func (s) TestOutlierDetectionConfigPropagationToChildPolicy(t *testing.T) {
 								IgnoreReresolutionRequests: true,
 							},
 						},
-						Priorities: []string{"child0"},
+						Priorities: []string{fmt.Sprintf("{cluster=%s, child_number=0}", clusterName)},
 					},
 				},
 			},

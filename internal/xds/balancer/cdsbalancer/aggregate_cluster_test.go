@@ -107,15 +107,15 @@ func (s) TestAggregateClusterSuccess_LeafNode(t *testing.T) {
 			name:                  "eds",
 			firstClusterResource:  e2e.DefaultCluster(clusterName, serviceName, e2e.SecurityLevelNone),
 			secondClusterResource: e2e.DefaultCluster(clusterName, serviceName+"-new", e2e.SecurityLevelNone),
-			wantFirstChildCfg:     createLeafClusterConfig(clusterName, "child0", true),
-			wantSecondChildCfg:    createLeafClusterConfig(clusterName, "child0", true),
+			wantFirstChildCfg:     createLeafClusterConfig(clusterName, true),
+			wantSecondChildCfg:    createLeafClusterConfig(clusterName, true),
 		},
 		{
 			name:                  "dns",
 			firstClusterResource:  makeLogicalDNSClusterResource(clusterName, "dns_host", uint32(port)),
 			secondClusterResource: makeLogicalDNSClusterResource(clusterName, "dns_host_new", uint32(port)),
-			wantFirstChildCfg:     createLeafClusterConfig(clusterName, "child0", false),
-			wantSecondChildCfg:    createLeafClusterConfig(clusterName, "child0", false),
+			wantFirstChildCfg:     createLeafClusterConfig(clusterName, false),
+			wantSecondChildCfg:    createLeafClusterConfig(clusterName, false),
 		},
 	}
 
@@ -212,14 +212,14 @@ func (s) TestAggregateClusterSuccess_ThenUpdateChildClusters(t *testing.T) {
 			edsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(edsClusterName, "child0", true),
+					Config: createLeafClusterConfig(edsClusterName, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
 			dnsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(dnsClusterName, "child0", false),
+					Config: createLeafClusterConfig(dnsClusterName, false),
 				},
 				IgnoreReresolutionRequests: false,
 			},
@@ -254,14 +254,14 @@ func (s) TestAggregateClusterSuccess_ThenUpdateChildClusters(t *testing.T) {
 			edsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(edsClusterName, "child0", true),
+					Config: createLeafClusterConfig(edsClusterName, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
 			dnsClusterNameNew: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(dnsClusterNameNew, "child0", false),
+					Config: createLeafClusterConfig(dnsClusterNameNew, false),
 				},
 				IgnoreReresolutionRequests: false,
 			},
@@ -311,14 +311,14 @@ func (s) TestAggregateClusterSuccess_ThenChangeRootToEDS(t *testing.T) {
 			edsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(edsClusterName, "child0", true),
+					Config: createLeafClusterConfig(edsClusterName, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
 			dnsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(dnsClusterName, "child0", false),
+					Config: createLeafClusterConfig(dnsClusterName, false),
 				},
 				IgnoreReresolutionRequests: false,
 			},
@@ -348,7 +348,7 @@ func (s) TestAggregateClusterSuccess_ThenChangeRootToEDS(t *testing.T) {
 	}
 	// Since the service name of the EDS cluster remains same, same priority name
 	// is used.
-	wantSingleChildCfg := createLeafClusterConfig(clusterName, "child0", true)
+	wantSingleChildCfg := createLeafClusterConfig(clusterName, true)
 	if err := compareLoadBalancingConfig(ctx, odCfgCh, wantSingleChildCfg); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func (s) TestAggregatedClusterSuccess_SwitchBetweenLeafAndAggregate(t *testing.T
 	if err := mgmtServer.Update(ctx, resources); err != nil {
 		t.Fatal(err)
 	}
-	wantSingleChildCfg := createLeafClusterConfig(clusterName, "child0", true)
+	wantSingleChildCfg := createLeafClusterConfig(clusterName, true)
 	if err := compareLoadBalancingConfig(ctx, odCfgCh, wantSingleChildCfg); err != nil {
 		t.Fatal(err)
 	}
@@ -405,14 +405,14 @@ func (s) TestAggregatedClusterSuccess_SwitchBetweenLeafAndAggregate(t *testing.T
 			edsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(edsClusterName, "child0", true),
+					Config: createLeafClusterConfig(edsClusterName, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
 			dnsClusterName: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(dnsClusterName, "child0", false),
+					Config: createLeafClusterConfig(dnsClusterName, false),
 				},
 				IgnoreReresolutionRequests: false,
 			},
@@ -592,7 +592,7 @@ func (s) TestAggregatedClusterSuccess_DiamondDependency(t *testing.T) {
 			clusterNameD: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(clusterNameD, "child0", true),
+					Config: createLeafClusterConfig(clusterNameD, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
@@ -663,14 +663,14 @@ func (s) TestAggregatedClusterSuccess_IgnoreDups(t *testing.T) {
 			clusterNameC: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(clusterNameC, "child0", true),
+					Config: createLeafClusterConfig(clusterNameC, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
 			clusterNameD: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(clusterNameD, "child0", true),
+					Config: createLeafClusterConfig(clusterNameD, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
@@ -757,7 +757,7 @@ func (s) TestAggregatedCluster_NodeChildOfItself(t *testing.T) {
 			clusterNameB: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(clusterNameB, "child0", true),
+					Config: createLeafClusterConfig(clusterNameB, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},
@@ -869,7 +869,7 @@ func (s) TestAggregatedCluster_CycleWithLeafNode(t *testing.T) {
 			clusterNameC: {
 				Config: &iserviceconfig.BalancerConfig{
 					Name:   outlierdetection.Name,
-					Config: createLeafClusterConfig(clusterNameC, "child0", true),
+					Config: createLeafClusterConfig(clusterNameC, true),
 				},
 				IgnoreReresolutionRequests: true,
 			},

@@ -317,7 +317,8 @@ func verifyRPCError(gotErr error, wantCode codes.Code, wantErr, wantNodeID strin
 // createLeafClusterConfig returns the expected LoadBalancingConfig tree for a
 // leaf cluster under gRFC A75 topology:
 // outlier_detection -> cluster_impl -> priority -> wrr_locality -> round_robin.
-func createLeafClusterConfig(cluster string, pName string, ignoreReresolution bool) *outlierdetection.LBConfig {
+func createLeafClusterConfig(cluster string, ignoreReresolution bool) *outlierdetection.LBConfig {
+	pName := fmt.Sprintf("{cluster=%s, child_number=0}", cluster)
 	return &outlierdetection.LBConfig{
 		Interval:           iserviceconfig.Duration(10 * time.Second),
 		BaseEjectionTime:   iserviceconfig.Duration(30 * time.Second),
@@ -486,7 +487,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"child0": {
+									fmt.Sprintf("{cluster=%s, child_number=0}", clusterName): {
 										Config: &iserviceconfig.BalancerConfig{
 											Name:   wrrlocality.Name,
 											Config: &wrrlocality.LBConfig{ChildPolicy: &iserviceconfig.BalancerConfig{Name: roundrobin.Name}},
@@ -494,7 +495,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"child0"},
+								Priorities: []string{fmt.Sprintf("{cluster=%s, child_number=0}", clusterName)},
 							},
 						},
 					},
@@ -531,7 +532,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"child0": {
+									fmt.Sprintf("{cluster=%s, child_number=0}", clusterName): {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -542,7 +543,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"child0"},
+								Priorities: []string{fmt.Sprintf("{cluster=%s, child_number=0}", clusterName)},
 							},
 						},
 					},
@@ -580,7 +581,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"child0": {
+									fmt.Sprintf("{cluster=%s, child_number=0}", clusterName): {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -591,7 +592,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"child0"},
+								Priorities: []string{fmt.Sprintf("{cluster=%s, child_number=0}", clusterName)},
 							},
 						},
 					},
@@ -648,7 +649,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 							Name: priority.Name,
 							Config: &priority.LBConfig{
 								Children: map[string]*priority.Child{
-									"child0": {
+									fmt.Sprintf("{cluster=%s, child_number=0}", clusterName): {
 										Config: &iserviceconfig.BalancerConfig{
 											Name: ringhash.Name,
 											Config: &iringhash.LBConfig{
@@ -659,7 +660,7 @@ func (s) TestClusterUpdate_Success(t *testing.T) {
 										IgnoreReresolutionRequests: true,
 									},
 								},
-								Priorities: []string{"child0"},
+								Priorities: []string{fmt.Sprintf("{cluster=%s, child_number=0}", clusterName)},
 							},
 						},
 					},
