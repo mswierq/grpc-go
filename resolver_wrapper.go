@@ -72,6 +72,10 @@ func (ccr *ccResolverWrapper) start() error {
 			errCh <- ctx.Err()
 			return
 		}
+		childDialOpts := make([]any, len(ccr.cc.dopts.childDialOptions))
+		for i, opt := range ccr.cc.dopts.childDialOptions {
+			childDialOpts[i] = opt
+		}
 		opts := resolver.BuildOptions{
 			DisableServiceConfig: ccr.cc.dopts.disableServiceConfig,
 			DialCreds:            ccr.cc.dopts.copts.TransportCredentials,
@@ -79,6 +83,7 @@ func (ccr *ccResolverWrapper) start() error {
 			Dialer:               ccr.cc.dopts.copts.Dialer,
 			Authority:            ccr.cc.authority,
 			MetricsRecorder:      ccr.cc.metricsRecorderList,
+			ChildDialOptions:     childDialOpts,
 		}
 		var err error
 		// The delegating resolver is used unless:

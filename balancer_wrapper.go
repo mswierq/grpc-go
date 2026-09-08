@@ -83,16 +83,21 @@ type ccBalancerWrapper struct {
 // is invoked.
 func newCCBalancerWrapper(cc *ClientConn) *ccBalancerWrapper {
 	ctx, cancel := context.WithCancel(cc.ctx)
+	childDialOpts := make([]any, len(cc.dopts.childDialOptions))
+	for i, opt := range cc.dopts.childDialOptions {
+		childDialOpts[i] = opt
+	}
 	ccb := &ccBalancerWrapper{
 		cc: cc,
 		opts: balancer.BuildOptions{
-			DialCreds:       cc.dopts.copts.TransportCredentials,
-			CredsBundle:     cc.dopts.copts.CredsBundle,
-			Dialer:          cc.dopts.copts.Dialer,
-			Authority:       cc.authority,
-			CustomUserAgent: cc.dopts.copts.UserAgent,
-			ChannelzParent:  cc.channelz,
-			Target:          cc.parsedTarget,
+			DialCreds:        cc.dopts.copts.TransportCredentials,
+			CredsBundle:      cc.dopts.copts.CredsBundle,
+			Dialer:           cc.dopts.copts.Dialer,
+			Authority:        cc.authority,
+			CustomUserAgent:  cc.dopts.copts.UserAgent,
+			ChannelzParent:   cc.channelz,
+			Target:           cc.parsedTarget,
+			ChildDialOptions: childDialOpts,
 		},
 		serializer:       grpcsync.NewCallbackSerializer(ctx),
 		serializerCancel: cancel,

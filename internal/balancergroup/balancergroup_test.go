@@ -455,13 +455,17 @@ func (s) TestBalancerGroupBuildOptions(t *testing.T) {
 	// Setup the stub balancer such that we can read the build options passed to
 	// it in the UpdateClientConnState method.
 	bOpts := balancer.BuildOptions{
-		DialCreds:       insecure.NewCredentials(),
-		ChannelzParent:  channelz.RegisterChannel(nil, "test channel"),
-		CustomUserAgent: userAgent,
+		DialCreds:        insecure.NewCredentials(),
+		ChannelzParent:   channelz.RegisterChannel(nil, "test channel"),
+		CustomUserAgent:  userAgent,
+		ChildDialOptions: []any{"test-child-option"},
 	}
 	stub.Register(balancerName, stub.BalancerFuncs{
 		UpdateClientConnState: func(bd *stub.BalancerData, _ balancer.ClientConnState) error {
-			if bd.BuildOptions.DialCreds != bOpts.DialCreds || bd.BuildOptions.ChannelzParent != bOpts.ChannelzParent || bd.BuildOptions.CustomUserAgent != bOpts.CustomUserAgent {
+			if bd.BuildOptions.DialCreds != bOpts.DialCreds ||
+				bd.BuildOptions.ChannelzParent != bOpts.ChannelzParent ||
+				bd.BuildOptions.CustomUserAgent != bOpts.CustomUserAgent ||
+				len(bd.BuildOptions.ChildDialOptions) != len(bOpts.ChildDialOptions) {
 				return fmt.Errorf("buildOptions in child balancer: %v, want %v", bd, bOpts)
 			}
 			return nil

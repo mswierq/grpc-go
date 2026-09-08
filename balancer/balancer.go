@@ -216,6 +216,10 @@ type BuildOptions struct {
 	// same resolver.Target as passed to the resolver. See the documentation for
 	// the resolver.Target type for details about what it contains.
 	Target resolver.Target
+	// ChildDialOptions contains dial options (of type grpc.DialOption) to be
+	// applied to any child gRPC channels created by the balancer (e.g., to
+	// communicate with a remote load balancer server).
+	ChildDialOptions []any
 }
 
 // Builder creates a balancer.

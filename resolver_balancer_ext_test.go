@@ -29,11 +29,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer"
+	"google.golang.org/grpc/balancer/endpointsharding"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/internal"
+	"google.golang.org/grpc/internal/balancer/gracefulswitch"
 	"google.golang.org/grpc/internal/balancer/stub"
+	"google.golang.org/grpc/internal/balancergroup"
 	"google.golang.org/grpc/internal/channelz"
 	"google.golang.org/grpc/internal/testutils"
 	"google.golang.org/grpc/resolver"
@@ -302,5 +305,168 @@ func (s) TestEnterIdleDuringBalancerNewSubConn(t *testing.T) {
 			t.Fatalf("Found subchannels: %v; expected 0 entries", got)
 		}
 		cc.Connect()
+	}
+}
+
+type testChildDialOption struct {
+	grpc.EmptyDialOption
+	val string
+}
+
+// TestChildDialOptions_ResolverAndBalancer verifies that resolvers and
+// balancers receive the configured child dial options upon Build().
+func (s) TestChildDialOptions_ResolverAndBalancer(t *testing.T) {
+	name := strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(t.Name()), "/", ""), "_", "")
+	childOpt := testChildDialOption{val: "test-child-dial-option"}
+
+	resolverBuildOptsCh := make(chan resolver.BuildOptions, 1)
+	rb := manual.NewBuilderWithScheme(name)
+	rb.BuildCallback = func(_ resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) {
+		resolverBuildOptsCh <- opts
+		cc.UpdateState(resolver.State{
+			Addresses: []resolver.Address{{Addr: "test"}},
+		})
+	}
+	resolver.Register(rb)
+
+	balancerBuildOptsCh := make(chan balancer.BuildOptions, 1)
+	bf := stub.BalancerFuncs{
+		Init: func(bd *stub.BalancerData) {
+			balancerBuildOptsCh <- bd.BuildOptions
+		},
+	}
+	stub.Register(name, bf)
+
+	cc, err := grpc.NewClient(
+		name+":///",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChildChannelOptions(childOpt),
+		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"`+name+`":{}}]}`),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient failed: %v", err)
+	}
+	defer cc.Close()
+	cc.Connect()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	var resolverOpts resolver.BuildOptions
+	select {
+	case resolverOpts = <-resolverBuildOptsCh:
+	case <-ctx.Done():
+		t.Fatalf("Timed out waiting for resolver.Build to be called")
+	}
+
+	if len(resolverOpts.ChildDialOptions) != 1 {
+		t.Fatalf("Resolver received ChildDialOptions length %d, want 1", len(resolverOpts.ChildDialOptions))
+	}
+	if resolverOpts.ChildDialOptions[0] != childOpt {
+		t.Fatalf("Resolver received ChildDialOptions[0] = %v, want %v", resolverOpts.ChildDialOptions[0], childOpt)
+	}
+
+	var balancerOpts balancer.BuildOptions
+	select {
+	case balancerOpts = <-balancerBuildOptsCh:
+	case <-ctx.Done():
+		t.Fatalf("Timed out waiting for balancer.Build to be called")
+	}
+
+	if len(balancerOpts.ChildDialOptions) != 1 {
+		t.Fatalf("Balancer received ChildDialOptions length %d, want 1", len(balancerOpts.ChildDialOptions))
+	}
+	if balancerOpts.ChildDialOptions[0] != childOpt {
+		t.Fatalf("Balancer received ChildDialOptions[0] = %v, want %v", balancerOpts.ChildDialOptions[0], childOpt)
+	}
+}
+
+// TestChildDialOptions_BalancerDecorators verifies that balancer combinators
+// (gracefulswitch, balancergroup, and endpointsharding) forward child dial
+// options to their child balancers.
+func (s) TestChildDialOptions_BalancerDecorators(t *testing.T) {
+	childOpt := testChildDialOption{val: "test-child-dial-option"}
+	bOpts := balancer.BuildOptions{
+		DialCreds:        insecure.NewCredentials(),
+		ChildDialOptions: []any{childOpt},
+	}
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, cc balancer.ClientConn, bOpts balancer.BuildOptions, childBuilderName string)
+	}{
+		{
+			name: "gracefulswitch",
+			setup: func(t *testing.T, cc balancer.ClientConn, bOpts balancer.BuildOptions, childBuilderName string) {
+				gsb := gracefulswitch.NewBalancer(cc, bOpts)
+				t.Cleanup(gsb.Close)
+
+				if err := gsb.SwitchTo(balancer.Get(childBuilderName)); err != nil {
+					t.Fatalf("gsb.SwitchTo failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "balancergroup",
+			setup: func(t *testing.T, cc balancer.ClientConn, bOpts balancer.BuildOptions, childBuilderName string) {
+				bg := balancergroup.New(balancergroup.Options{
+					CC:        cc,
+					BuildOpts: bOpts,
+				})
+				t.Cleanup(bg.Close)
+
+				bg.Add("child", balancer.Get(childBuilderName))
+				if err := bg.UpdateClientConnState("child", balancer.ClientConnState{}); err != nil {
+					t.Fatalf("bg.UpdateClientConnState failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "endpointsharding",
+			setup: func(t *testing.T, cc balancer.ClientConn, bOpts balancer.BuildOptions, childBuilderName string) {
+				es := endpointsharding.NewBalancer(cc, bOpts, balancer.Get(childBuilderName).Build, endpointsharding.Options{})
+				t.Cleanup(es.Close)
+
+				if err := es.UpdateClientConnState(balancer.ClientConnState{
+					ResolverState: resolver.State{
+						Endpoints: []resolver.Endpoint{{Addresses: []resolver.Address{{Addr: "127.0.0.1:1234"}}}},
+					},
+				}); err != nil {
+					t.Fatalf("es.UpdateClientConnState failed: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			childBuilderName := strings.ReplaceAll(strings.ToLower(t.Name()), "/", "")
+			childOptsCh := make(chan balancer.BuildOptions, 1)
+			stub.Register(childBuilderName, stub.BalancerFuncs{
+				Init: func(bd *stub.BalancerData) {
+					childOptsCh <- bd.BuildOptions
+				},
+			})
+
+			cc := testutils.NewBalancerClientConn(t)
+			tc.setup(t, cc, bOpts, childBuilderName)
+
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+
+			var got balancer.BuildOptions
+			select {
+			case got = <-childOptsCh:
+			case <-ctx.Done():
+				t.Fatalf("Timed out waiting for child balancer to be built")
+			}
+
+			if len(got.ChildDialOptions) != 1 {
+				t.Fatalf("Child received ChildDialOptions length %d, want 1", len(got.ChildDialOptions))
+			}
+			if got.ChildDialOptions[0] != childOpt {
+				t.Fatalf("Child received ChildDialOptions[0] = %v, want %v", got.ChildDialOptions[0], childOpt)
+			}
+		})
 	}
 }

@@ -178,6 +178,10 @@ type BuildOptions struct {
 	Authority string
 	// MetricsRecorder is the metrics recorder to do recording.
 	MetricsRecorder stats.MetricsRecorder
+	// ChildDialOptions contains dial options (of type grpc.DialOption) to be
+	// applied to any child gRPC channels created by the resolver (e.g., to
+	// communicate with a remote management server).
+	ChildDialOptions []any
 }
 
 // An Endpoint is one network endpoint, or server, which may have multiple
