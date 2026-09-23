@@ -143,6 +143,17 @@ var (
 	// on the Server.
 	ChildDialOptionsFromServer any // func(*grpc.Server) []grpc.DialOption
 
+	// ChildDialOptionsFromClientConn returns the child dial options configured
+	// on the ClientConn.
+	//
+	// TODO: Remove once ClientConn and the xDS resolver propagate child dial
+	// options to resolvers and nested xDS channels.
+	//
+	// Testing Only
+	//
+	// This function should ONLY be used for testing.
+	ChildDialOptionsFromClientConn any // func(*grpc.ClientConn) []grpc.DialOption
+
 	// SubscribeToConnectivityStateChanges adds a grpcsync.Subscriber to a
 	// provided grpc.ClientConn.
 	SubscribeToConnectivityStateChanges any // func(*grpc.ClientConn, grpcsync.Subscriber)

@@ -134,8 +134,8 @@ func (mr *metricsReporter) ReportMetric(metric any) {
 	}
 }
 
-func newClientImpl(config *bootstrap.Config, metricsRecorder estats.MetricsRecorder, target string, watchExpiryTimeout time.Duration) (*clientImpl, error) {
-	gConfig, err := BuildXDSClientConfig(config, metricsRecorder, target, watchExpiryTimeout)
+func newClientImpl(config *bootstrap.Config, metricsRecorder estats.MetricsRecorder, target string, watchExpiryTimeout time.Duration, childDialOptions []grpc.DialOption) (*clientImpl, error) {
+	gConfig, err := BuildXDSClientConfig(config, metricsRecorder, target, watchExpiryTimeout, childDialOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +176,10 @@ func (c *clientImpl) decrRef() int32 {
 	return atomic.AddInt32(&c.refCount, -1)
 }
 
-func buildServerConfigs(bootstrapSC []*bootstrap.ServerConfig, grpcTransportConfigs map[string]grpctransport.Config, gServerCfgMap map[xdsclient.ServerConfig]*bootstrap.ServerConfig) ([]xdsclient.ServerConfig, error) {
+func buildServerConfigs(bootstrapSC []*bootstrap.ServerConfig, grpcTransportConfigs map[string]grpctransport.Config, gServerCfgMap map[xdsclient.ServerConfig]*bootstrap.ServerConfig, childDialOptions []grpc.DialOption) ([]xdsclient.ServerConfig, error) {
 	var gServerCfg []xdsclient.ServerConfig
 	for _, sc := range bootstrapSC {
-		if err := populateGRPCTransportConfigsFromServerConfig(sc, grpcTransportConfigs); err != nil {
+		if err := populateGRPCTransportConfigsFromServerConfig(sc, grpcTransportConfigs, childDialOptions); err != nil {
 			return nil, err
 		}
 		var serverFeatures xdsclient.ServerFeature
@@ -205,7 +205,7 @@ func buildServerConfigs(bootstrapSC []*bootstrap.ServerConfig, grpcTransportConf
 // BuildXDSClientConfig builds the xdsclient.Config from the bootstrap.Config.
 //
 // This function is exported for fuzz testing purposes only.
-func BuildXDSClientConfig(config *bootstrap.Config, metricsRecorder estats.MetricsRecorder, target string, watchExpiryTimeout time.Duration) (xdsclient.Config, error) {
+func BuildXDSClientConfig(config *bootstrap.Config, metricsRecorder estats.MetricsRecorder, target string, watchExpiryTimeout time.Duration, childDialOptions ...grpc.DialOption) (xdsclient.Config, error) {
 	grpcTransportConfigs := make(map[string]grpctransport.Config)
 	gServerCfgMap := make(map[xdsclient.ServerConfig]*bootstrap.ServerConfig)
 
@@ -217,14 +217,14 @@ func BuildXDSClientConfig(config *bootstrap.Config, metricsRecorder estats.Metri
 		if len(cfg.XDSServers) >= 1 {
 			serverCfg = cfg.XDSServers
 		}
-		gsc, err := buildServerConfigs(serverCfg, grpcTransportConfigs, gServerCfgMap)
+		gsc, err := buildServerConfigs(serverCfg, grpcTransportConfigs, gServerCfgMap, childDialOptions)
 		if err != nil {
 			return xdsclient.Config{}, err
 		}
 		gAuthorities[name] = xdsclient.Authority{XDSServers: gsc}
 	}
 
-	gServerCfgs, err := buildServerConfigs(config.XDSServers(), grpcTransportConfigs, gServerCfgMap)
+	gServerCfgs, err := buildServerConfigs(config.XDSServers(), grpcTransportConfigs, gServerCfgMap, childDialOptions)
 	if err != nil {
 		return xdsclient.Config{}, err
 	}
@@ -258,8 +258,10 @@ func BuildXDSClientConfig(config *bootstrap.Config, metricsRecorder estats.Metri
 
 // populateGRPCTransportConfigsFromServerConfig iterates through the channel
 // credentials of the provided server configuration, builds credential bundles,
-// and populates the grpctransport.Config map.
-func populateGRPCTransportConfigsFromServerConfig(sc *bootstrap.ServerConfig, grpcTransportConfigs map[string]grpctransport.Config) error {
+// and populates the grpctransport.Config map with a GRPCNewClient function
+// that prepends childDialOptions (along with WithChildChannelOptions for
+// multi-level propagation) and appends the server's bootstrap dial options.
+func populateGRPCTransportConfigsFromServerConfig(sc *bootstrap.ServerConfig, grpcTransportConfigs map[string]grpctransport.Config, childDialOptions []grpc.DialOption) error {
 	for _, cc := range sc.ChannelCreds() {
 		c := xdsbootstrap.GetChannelCredentials(cc.Type)
 		if c == nil {
@@ -272,8 +274,14 @@ func populateGRPCTransportConfigsFromServerConfig(sc *bootstrap.ServerConfig, gr
 		grpcTransportConfigs[cc.Type] = grpctransport.Config{
 			Credentials: bundle,
 			GRPCNewClient: func(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-				opts = append(opts, sc.DialOptions()...)
-				return grpc.NewClient(target, opts...)
+				var allOpts []grpc.DialOption
+				allOpts = append(allOpts, childDialOptions...)
+				if len(childDialOptions) > 0 {
+					allOpts = append(allOpts, grpc.WithChildChannelOptions(childDialOptions...))
+				}
+				allOpts = append(allOpts, opts...)
+				allOpts = append(allOpts, sc.DialOptions()...)
+				return grpc.NewClient(target, allOpts...)
 			},
 		}
 	}

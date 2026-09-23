@@ -24,6 +24,7 @@ import (
 	"time"
 
 	v3statuspb "github.com/envoyproxy/go-control-plane/envoy/service/status/v3"
+	"google.golang.org/grpc"
 	estats "google.golang.org/grpc/experimental/stats"
 	"google.golang.org/grpc/internal/envconfig"
 	istats "google.golang.org/grpc/internal/stats"
@@ -78,6 +79,9 @@ type OptionsForTesting struct {
 	// the client. If unset, the client will use the config provided by env
 	// variables.
 	Config *bootstrap.Config
+
+	// ChildDialOptions contains dial options to be applied to child channels.
+	ChildDialOptions []grpc.DialOption
 }
 
 // NewPool creates a new xDS client pool with the given bootstrap config.
@@ -103,8 +107,8 @@ func NewPool(config *bootstrap.Config) *Pool {
 // The second return value represents a close function which the caller is
 // expected to invoke once they are done using the client.  It is safe for the
 // caller to invoke this close function multiple times.
-func (p *Pool) NewClientWithConfig(name string, metricsRecorder estats.MetricsRecorder, config *bootstrap.Config) (XDSClient, func(), error) {
-	return p.newRefCounted(name, metricsRecorder, defaultWatchExpiryTimeout, config)
+func (p *Pool) NewClientWithConfig(name string, metricsRecorder estats.MetricsRecorder, config *bootstrap.Config, childDialOptions []grpc.DialOption) (XDSClient, func(), error) {
+	return p.newRefCounted(name, metricsRecorder, defaultWatchExpiryTimeout, config, childDialOptions)
 }
 
 // NewClient returns an xDS client with the given name from the pool. If the
@@ -114,8 +118,8 @@ func (p *Pool) NewClientWithConfig(name string, metricsRecorder estats.MetricsRe
 // The second return value represents a close function which the caller is
 // expected to invoke once they are done using the client.  It is safe for the
 // caller to invoke this close function multiple times.
-func (p *Pool) NewClient(name string, metricsRecorder estats.MetricsRecorder) (XDSClient, func(), error) {
-	return p.newRefCounted(name, metricsRecorder, defaultWatchExpiryTimeout, nil)
+func (p *Pool) NewClient(name string, metricsRecorder estats.MetricsRecorder, childDialOptions []grpc.DialOption) (XDSClient, func(), error) {
+	return p.newRefCounted(name, metricsRecorder, defaultWatchExpiryTimeout, nil, childDialOptions)
 }
 
 // NewClientForTesting returns an xDS client configured with the provided
@@ -142,7 +146,7 @@ func (p *Pool) NewClientForTesting(opts OptionsForTesting) (XDSClient, func(), e
 	if opts.MetricsRecorder == nil {
 		opts.MetricsRecorder = istats.NewMetricsRecorderList(nil)
 	}
-	c, cancel, err := p.newRefCounted(opts.Name, opts.MetricsRecorder, opts.WatchExpiryTimeout, opts.Config)
+	c, cancel, err := p.newRefCounted(opts.Name, opts.MetricsRecorder, opts.WatchExpiryTimeout, opts.Config, opts.ChildDialOptions)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -276,8 +280,10 @@ func (p *Pool) clientRefCountedClose(name string) {
 
 // newRefCounted creates a new reference counted xDS client implementation for
 // name, if one does not exist already. If an xDS client for the given name
-// exists, it gets a reference to it and returns it.
-func (p *Pool) newRefCounted(name string, metricsRecorder estats.MetricsRecorder, watchExpiryTimeout time.Duration, bConfig *bootstrap.Config) (*clientImpl, func(), error) {
+// exists, it gets a reference to it and returns it. Per gRFC A110, if a
+// client for the target already exists, the first parent's options win and
+// subsequent options are ignored.
+func (p *Pool) newRefCounted(name string, metricsRecorder estats.MetricsRecorder, watchExpiryTimeout time.Duration, bConfig *bootstrap.Config, childDialOptions []grpc.DialOption) (*clientImpl, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -305,7 +311,7 @@ func (p *Pool) newRefCounted(name string, metricsRecorder estats.MetricsRecorder
 		return nil, nil, fmt.Errorf("failed to read xDS bootstrap config from env vars: bootstrap environment variables (%q or %q) not defined and fallback config not set", envconfig.XDSBootstrapFileNameEnv, envconfig.XDSBootstrapFileContentEnv)
 	}
 
-	c, err := newClientImpl(config, metricsRecorder, name, watchExpiryTimeout)
+	c, err := newClientImpl(config, metricsRecorder, name, watchExpiryTimeout, childDialOptions)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -789,6 +789,14 @@ func init() {
 	internal.ExitIdleModeForTesting = func(cc *ClientConn) {
 		cc.idlenessMgr.ExitIdleMode()
 	}
+	// Only used for testing to inspect child dial options configured on a
+	// ClientConn.
+	//
+	// TODO: Remove once ClientConn and the xDS resolver propagate child dial
+	// options to resolvers and nested xDS channels.
+	internal.ChildDialOptionsFromClientConn = func(cc *ClientConn) []DialOption {
+		return slices.Clone(cc.dopts.childDialOptions)
+	}
 }
 
 func (cc *ClientConn) maybeApplyDefaultServiceConfig() {

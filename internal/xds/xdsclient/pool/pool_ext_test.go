@@ -25,9 +25,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcinternal "google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/grpctest"
 	"google.golang.org/grpc/internal/stubserver"
 	"google.golang.org/grpc/internal/testutils"
@@ -65,7 +67,7 @@ func Test(t *testing.T) {
 // Then it sets the env var XDSBootstrapFileName and retry creating a client
 // in DefaultPool. This should succeed.
 func (s) TestDefaultPool_LazyLoadBootstrapConfig(t *testing.T) {
-	_, closeFunc, err := xdsclient.DefaultPool.NewClient(t.Name(), &estats.UnimplementedMetricsRecorder{})
+	_, closeFunc, err := xdsclient.DefaultPool.NewClient(t.Name(), &estats.UnimplementedMetricsRecorder{}, nil)
 	if err == nil {
 		t.Fatalf("xdsclient.DefaultPool.NewClient() succeeded without setting bootstrap config env vars, want failure")
 	}
@@ -93,7 +95,7 @@ func (s) TestDefaultPool_LazyLoadBootstrapConfig(t *testing.T) {
 	// state to make it re-read the env vars during next client creation.
 	xdsclient.DefaultPool.UnsetBootstrapConfigForTesting()
 
-	_, closeFunc, err = xdsclient.DefaultPool.NewClient(t.Name(), &estats.UnimplementedMetricsRecorder{})
+	_, closeFunc, err = xdsclient.DefaultPool.NewClient(t.Name(), &estats.UnimplementedMetricsRecorder{}, nil)
 	if err != nil {
 		t.Fatalf("Failed to create xDS client: %v", err)
 	}
@@ -246,5 +248,168 @@ func (s) TestNestedXDSChannel(t *testing.T) {
 	client := testgrpc.NewTestServiceClient(cc)
 	if _, err := client.EmptyCall(ctx, &testpb.Empty{}); err != nil {
 		t.Fatalf("rpc EmptyCall() failed: %v", err)
+	}
+}
+
+type testDialOption struct {
+	grpc.EmptyDialOption
+	name string
+}
+
+// Verifies shared-client resolution rules and child dial option propagation
+// when multiple callers request an xDS client for the same target name from a
+// Pool:
+//   - If a client for the target already exists in the pool, the first caller's
+//     childDialOptions win and subsequent callers' options are ignored.
+//   - When the shared client dials the control plane, the first caller's
+//     options and recursive WithChildChannelOptions are applied to the gRPC
+//     channel.
+//   - Only after all references are closed does creating a new client for that
+//     target apply new childDialOptions.
+func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
+	bs, err := bootstrap.NewContentsForTesting(bootstrap.ConfigOptionsForTesting{
+		Servers: []byte(`[{
+			"server_uri": "passthrough:///non-existent-management-server:443",
+			"channel_creds": [{"type": "insecure"}]
+		}]`),
+		Node: []byte(fmt.Sprintf(`{"id": "%s"}`, uuid.New().String())),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bootstrap configuration: %v", err)
+	}
+	config, err := bootstrap.NewConfigFromContents(bs)
+	if err != nil {
+		t.Fatalf("Failed to parse bootstrap configuration: %v", err)
+	}
+	pool := xdsclient.NewPool(config)
+
+	type streamInterceptCall struct {
+		caller string
+		cc     *grpc.ClientConn
+	}
+	streamCh := testutils.NewChannel()
+	makeCallerOpts := func(name string) []grpc.DialOption {
+		return []grpc.DialOption{
+			&testDialOption{name: name},
+			grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+				streamCh.Replace(streamInterceptCall{caller: name, cc: cc})
+				return streamer(ctx, desc, cc, method, opts...)
+			}),
+		}
+	}
+
+	const (
+		caller1Name = "caller1_opt"
+		caller2Name = "caller2_opt"
+		targetName  = "test-shared-client-target"
+	)
+
+	caller1Opts := makeCallerOpts(caller1Name)
+	caller2Opts := makeCallerOpts(caller2Name)
+	caller3Opts := makeCallerOpts("caller3_opt")
+
+	// Caller 1 creates the xDS client with caller1Opts.
+	client1, close1, err := pool.NewClient(targetName, &estats.UnimplementedMetricsRecorder{}, caller1Opts)
+	if err != nil {
+		t.Fatalf("Failed to create client for caller 1 via pool.NewClient(): %v", err)
+	}
+
+	// Caller 2 requests the same target with caller2Opts; must reuse client1 and
+	// ignore caller2Opts.
+	client2, close2, err := pool.NewClient(targetName, &estats.UnimplementedMetricsRecorder{}, caller2Opts)
+	if err != nil {
+		t.Fatalf("Failed to create client for caller 2 via pool.NewClient(): %v", err)
+	}
+
+	// Caller 3 requests the same target via NewClientWithConfig with caller3Opts;
+	// must reuse client1 and ignore caller3Opts.
+	client3, close3, err := pool.NewClientWithConfig(targetName, &estats.UnimplementedMetricsRecorder{}, config, caller3Opts)
+	if err != nil {
+		t.Fatalf("Failed to create client for caller 3 via pool.NewClientWithConfig(): %v", err)
+	}
+
+	if client1 != client2 || client1 != client3 {
+		t.Fatalf("Expected shared client instance across callers, got client1=%p, client2=%p, client3=%p", client1, client2, client3)
+	}
+
+	extractNames := func(opts []grpc.DialOption) []string {
+		var names []string
+		for _, opt := range opts {
+			if tdOpt, ok := opt.(*testDialOption); ok {
+				names = append(names, tdOpt.name)
+			}
+		}
+		return names
+	}
+
+	// Start load reporting on client1 to trigger gRPC channel and stream
+	// creation to the control plane.
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	_, stopLoadReport := client1.ReportLoad(config.XDSServers()[0])
+
+	val, err := streamCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Timeout waiting for control plane stream creation: %v", err)
+	}
+	call := val.(streamInterceptCall)
+
+	// Verify that the channel to the control plane applied caller 1's stream
+	// interceptor and NOT caller 2 or 3's options.
+	if call.caller != caller1Name {
+		t.Errorf("control plane stream interceptor caller = %q, want %q", call.caller, caller1Name)
+	}
+
+	// Verify recursive option insertion on the created control plane ClientConn.
+	//
+	// TODO: Remove this ChildDialOptionsFromClientConn workaround once
+	// ClientConn and the xDS resolver propagate child dial options to resolvers
+	// and nested xDS channels.
+	getChildOpts := grpcinternal.ChildDialOptionsFromClientConn.(func(*grpc.ClientConn) []grpc.DialOption)
+	gotCCChildOptNames := extractNames(getChildOpts(call.cc))
+	if diff := cmp.Diff([]string{caller1Name}, gotCCChildOptNames); diff != "" {
+		t.Errorf("recursive ChildDialOptions on control plane ClientConn mismatch (-want +got):\n%s", diff)
+	}
+
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	stopCancel()
+	stopLoadReport(stopCtx)
+
+	// Release caller 1 and caller 2 references. Since caller 3 still holds a
+	// reference, the client must remain alive in the pool.
+	close1()
+	close2()
+
+	client4, close4, err := pool.NewClient(targetName, &estats.UnimplementedMetricsRecorder{}, caller2Opts)
+	if err != nil {
+		t.Fatalf("Failed to create client via pool.NewClient() while refcount > 0: %v", err)
+	}
+	if client4 != client1 {
+		t.Fatalf("Expected existing client %p while refcount > 0, got %p", client1, client4)
+	}
+	close4()
+
+	// Release the last reference (caller 3). Now the client should be closed
+	// and removed from the pool.
+	close3()
+
+	// Creating a client for targetName now should create a new instance with
+	// caller 2's options winning.
+	clientNew, closeNew, err := pool.NewClient(targetName, &estats.UnimplementedMetricsRecorder{}, caller2Opts)
+	if err != nil {
+		t.Fatalf("Failed to create client via pool.NewClient() after full close: %v", err)
+	}
+	defer closeNew()
+
+	_, stopNewLoadReport := clientNew.ReportLoad(config.XDSServers()[0])
+	defer stopNewLoadReport(stopCtx)
+
+	val, err = streamCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Timeout waiting for new client control plane stream creation: %v", err)
+	}
+	newCall := val.(streamInterceptCall)
+	if newCall.caller != caller2Name {
+		t.Errorf("new client control plane stream interceptor caller = %q, want %q", newCall.caller, caller2Name)
 	}
 }

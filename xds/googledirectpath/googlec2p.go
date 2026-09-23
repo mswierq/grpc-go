@@ -200,7 +200,7 @@ func (c2pResolverBuilder) Build(t resolver.Target, cc resolver.ClientConn, opts 
 	// While the c2p resolver itself does not directly use the client, creating
 	// it ensures that when the xDS resolver later requests a client for the
 	// same target, the existing instance will be reused.
-	_, cancel, err := xdsClientPool.NewClientWithConfig(t.String(), opts.MetricsRecorder, config)
+	_, cancel, err := xdsClientPool.NewClientWithConfig(t.String(), opts.MetricsRecorder, config, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create xds client: %v", err)
 	}
