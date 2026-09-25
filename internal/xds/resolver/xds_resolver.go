@@ -103,7 +103,12 @@ func init() {
 	internal.NewXDSResolverWithClientForTesting = newBuilderWithClientForTesting
 
 	rinternal.NewWRR = wrr.NewRandom
-	rinternal.NewXDSClient = xdsclient.DefaultPool.NewClient
+	// TODO: Remove this wrapper and assign xdsclient.DefaultPool.NewClient
+	// directly once rinternal.NewXDSClient and xdsResolverBuilder.newXDSClient
+	// are updated to accept child dial options.
+	rinternal.NewXDSClient = func(target string, mr estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
+		return xdsclient.DefaultPool.NewClient(target, mr, nil)
+	}
 }
 
 type xdsResolverBuilder struct {

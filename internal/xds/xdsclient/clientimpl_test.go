@@ -19,6 +19,7 @@
 package xdsclient
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -28,7 +29,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcinternal "google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/envconfig"
 	"google.golang.org/grpc/internal/testutils"
 	"google.golang.org/grpc/internal/testutils/stats"
@@ -38,6 +41,7 @@ import (
 	"google.golang.org/grpc/internal/xds/clients/xdsclient"
 	"google.golang.org/grpc/internal/xds/xdsclient/xdsresource"
 	"google.golang.org/grpc/internal/xds/xdsclient/xdsresource/version"
+	xdsbootstrap "google.golang.org/grpc/xds/bootstrap"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -359,5 +363,159 @@ func (s) TestServerConfigCallCredsIntegration(t *testing.T) {
 	dialOpts := sc.DialOptions()
 	if len(dialOpts) != 1 {
 		t.Errorf("Got %d dial options, want 1", len(dialOpts))
+	}
+}
+
+type testDialOption struct {
+	grpc.EmptyDialOption
+	name string
+}
+
+type testChildDialOptsCredsBundle struct {
+	credentials.Bundle
+	dialOpts []grpc.DialOption
+}
+
+func (b *testChildDialOptsCredsBundle) DialOptions() []grpc.DialOption {
+	return b.dialOpts
+}
+
+type testChildDialOptsCredsBuilder struct {
+	name     string
+	dialOpts []grpc.DialOption
+}
+
+func (b *testChildDialOptsCredsBuilder) Build(json.RawMessage) (credentials.Bundle, func(), error) {
+	return &testChildDialOptsCredsBundle{
+		Bundle:   insecure.NewBundle(),
+		dialOpts: b.dialOpts,
+	}, func() {}, nil
+}
+
+func (b *testChildDialOptsCredsBuilder) Name() string {
+	return b.name
+}
+
+// Verifies that populateGRPCTransportConfigsFromServerConfig configures the
+// GRPCNewClient function with dial options in the required order:
+//  1. childDialOptions prepended first.
+//  2. grpc.WithChildChannelOptions(childDialOptions...) prepended next for
+//     multi-level recursion.
+//  3. transport dial options passed to GRPCNewClient.
+//  4. bootstrap server config DialOptions() appended last so mandatory
+//     bootstrap options override child options.
+func (s) TestPopulateGRPCTransportConfigsFromServerConfig_ChildDialOptions(t *testing.T) {
+	const (
+		credsName          = "test_child_dial_opts_creds"
+		bootstrapUnaryName = "bootstrap_unary"
+		bootstrapOptName   = "bootstrap_opt"
+		childOpt1Name      = "child_opt_1"
+		childOpt2Name      = "child_opt_2"
+		transportOptName   = "transport_opt"
+	)
+
+	var executedOrder []string
+	var childIntCalled bool
+	recordChainInt := func(name string, terminal bool) grpc.UnaryClientInterceptor {
+		return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			executedOrder = append(executedOrder, name)
+			if terminal {
+				return nil
+			}
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+	}
+	childInt := func(context.Context, string, any, any, *grpc.ClientConn, grpc.UnaryInvoker, ...grpc.CallOption) error {
+		childIntCalled = true
+		return nil
+	}
+	bootstrapInt := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		executedOrder = append(executedOrder, bootstrapUnaryName)
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+
+	xdsbootstrap.RegisterChannelCredentials(&testChildDialOptsCredsBuilder{
+		name: credsName,
+		dialOpts: []grpc.DialOption{
+			grpc.WithChainUnaryInterceptor(recordChainInt(bootstrapOptName, true)),
+			grpc.WithUnaryInterceptor(bootstrapInt),
+		},
+	})
+
+	serverConfigJSON := fmt.Sprintf(`{
+		"server_uri": "passthrough:///xds-server:443",
+		"channel_creds": [{"type": %q}]
+	}`, credsName)
+
+	var sc bootstrap.ServerConfig
+	if err := sc.UnmarshalJSON([]byte(serverConfigJSON)); err != nil {
+		t.Fatalf("Failed to unmarshal server config: %v", err)
+	}
+
+	childOpt1 := &testDialOption{name: childOpt1Name}
+	childOpt2 := &testDialOption{name: childOpt2Name}
+	childDialOptions := []grpc.DialOption{
+		childOpt1,
+		childOpt2,
+		// Include a nested WithChildChannelOptions inside childDialOptions to
+		// verify that populateGRPCTransportConfigsFromServerConfig appends
+		// WithChildChannelOptions(childDialOptions...) after childDialOptions,
+		// overwriting this nested option on the created ClientConn.
+		grpc.WithChildChannelOptions(&testDialOption{name: "overwritten_nested_opt"}),
+		grpc.WithChainUnaryInterceptor(recordChainInt(childOpt1Name, false)),
+		grpc.WithChainUnaryInterceptor(recordChainInt(childOpt2Name, false)),
+		grpc.WithUnaryInterceptor(childInt),
+	}
+
+	grpcTransportConfigs := make(map[string]grpctransport.Config)
+	if err := populateGRPCTransportConfigsFromServerConfig(&sc, grpcTransportConfigs, childDialOptions); err != nil {
+		t.Fatalf("Failed to populate gRPC transport configs: %v", err)
+	}
+
+	transportCfg, ok := grpcTransportConfigs[credsName]
+	if !ok {
+		t.Fatalf("Missing entry in grpcTransportConfigs for %q", credsName)
+	}
+
+	transportOpt := grpc.WithChainUnaryInterceptor(recordChainInt(transportOptName, false))
+	cc, err := transportCfg.GRPCNewClient("passthrough:///xds-server:443", transportOpt, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("GRPCNewClient() failed: %v", err)
+	}
+	defer cc.Close()
+
+	// Verify option ordering and conflict resolution via the created ClientConn:
+	// - bootstrap_unary overrides childInt in cc.dopts.unaryInt (prepended first).
+	// - chained interceptors execute in the exact order applied to cc.dopts:
+	//   child_opt_1 -> child_opt_2 -> transport_opt -> bootstrap_opt.
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	_ = cc.Invoke(ctx, "/test/method", nil, nil)
+	if childIntCalled {
+		t.Errorf("child unary interceptor was called; expected bootstrap option to override child option")
+	}
+	wantOrder := []string{bootstrapUnaryName, childOpt1Name, childOpt2Name, transportOptName, bootstrapOptName}
+	if diff := cmp.Diff(wantOrder, executedOrder); diff != "" {
+		t.Errorf("dial option execution order on ClientConn mismatch (-want +got):\n%s", diff)
+	}
+
+	// Verify multi-level recursive option insertion on the created ClientConn:
+	// cc.dopts.childDialOptions must contain childDialOptions (overwriting the
+	// nested WithChildChannelOptions inside childDialOptions).
+	//
+	// TODO: Remove this ChildDialOptionsFromClientConn workaround once
+	// ClientConn and the xDS resolver propagate child dial options to resolvers
+	// and nested xDS channels.
+	getChildOpts := grpcinternal.ChildDialOptionsFromClientConn.(func(*grpc.ClientConn) []grpc.DialOption)
+	ccChildOpts := getChildOpts(cc)
+	var ccChildOptNames []string
+	for _, opt := range ccChildOpts {
+		if tdOpt, ok := opt.(*testDialOption); ok {
+			ccChildOptNames = append(ccChildOptNames, tdOpt.name)
+		}
+	}
+	wantChildOptNames := []string{childOpt1Name, childOpt2Name}
+	if diff := cmp.Diff(wantChildOptNames, ccChildOptNames); diff != "" {
+		t.Errorf("recursive ChildDialOptions on ClientConn mismatch (-want +got):\n%s", diff)
 	}
 }
