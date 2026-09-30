@@ -29,13 +29,14 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	grpcinternal "google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/grpctest"
 	"google.golang.org/grpc/internal/stubserver"
 	"google.golang.org/grpc/internal/testutils"
 	"google.golang.org/grpc/internal/testutils/xds/e2e"
 	"google.golang.org/grpc/internal/xds/bootstrap"
 	"google.golang.org/grpc/internal/xds/xdsclient"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
 	_ "google.golang.org/grpc/xds"
 
 	v3clusterpb "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -239,7 +240,20 @@ func (s) TestNestedXDSChannel(t *testing.T) {
 		t.Fatalf("Failed to update management server with resources: %v, err: %v", resouces, err)
 	}
 
-	cc, err := grpc.NewClient("xds:///"+serviceName, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	interceptedTargets := make(chan string, 2)
+	childStreamInt := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		select {
+		case interceptedTargets <- cc.Target():
+		default:
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+
+	cc, err := grpc.NewClient(
+		"xds:///"+serviceName,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChildChannelOptions(grpc.WithStreamInterceptor(childStreamInt)),
+	)
 	if err != nil {
 		t.Fatalf("grpc.NewClient() failed: %v", err)
 	}
@@ -248,6 +262,23 @@ func (s) TestNestedXDSChannel(t *testing.T) {
 	client := testgrpc.NewTestServiceClient(cc)
 	if _, err := client.EmptyCall(ctx, &testpb.Empty{}); err != nil {
 		t.Fatalf("rpc EmptyCall() failed: %v", err)
+	}
+
+	// Verify that WithChildChannelOptions propagated recursively to both the
+	// outer xDS control plane channel and the inner nested xDS control plane
+	// channel.
+	wantOuterTarget := fmt.Sprintf("xds://%s/%s", managementServerAuthority, managementServerServiceName)
+	wantInnerTarget := managementServer1.Address
+	seenTargets := make(map[string]bool)
+	for len(seenTargets) < 2 {
+		select {
+		case target := <-interceptedTargets:
+			if target == wantOuterTarget || target == wantInnerTarget {
+				seenTargets[target] = true
+			}
+		case <-ctx.Done():
+			t.Fatalf("Timeout waiting for child stream interceptor on nested xDS channels; seen=%v, want %q and %q", seenTargets, wantOuterTarget, wantInnerTarget)
+		}
 	}
 }
 
@@ -269,7 +300,7 @@ type testDialOption struct {
 func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
 	bs, err := bootstrap.NewContentsForTesting(bootstrap.ConfigOptionsForTesting{
 		Servers: []byte(`[{
-			"server_uri": "passthrough:///non-existent-management-server:443",
+			"server_uri": "custom:///non-existent-management-server:443",
 			"channel_creds": [{"type": "insecure"}]
 		}]`),
 		Node: []byte(fmt.Sprintf(`{"id": "%s"}`, uuid.New().String())),
@@ -283,6 +314,15 @@ func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
 	}
 	pool := xdsclient.NewPool(config)
 
+	resolverBuildOptsCh := testutils.NewChannel()
+	rb := manual.NewBuilderWithScheme("custom")
+	rb.BuildCallback = func(_ resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) {
+		resolverBuildOptsCh.Replace(opts)
+		cc.UpdateState(resolver.State{
+			Addresses: []resolver.Address{{Addr: "127.0.0.1:0"}},
+		})
+	}
+
 	type streamInterceptCall struct {
 		caller string
 		cc     *grpc.ClientConn
@@ -291,6 +331,7 @@ func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
 	makeCallerOpts := func(name string) []grpc.DialOption {
 		return []grpc.DialOption{
 			&testDialOption{name: name},
+			grpc.WithResolvers(rb),
 			grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 				streamCh.Replace(streamInterceptCall{caller: name, cc: cc})
 				return streamer(ctx, desc, cc, method, opts...)
@@ -332,7 +373,7 @@ func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
 		t.Fatalf("Expected shared client instance across callers, got client1=%p, client2=%p, client3=%p", client1, client2, client3)
 	}
 
-	extractNames := func(opts []grpc.DialOption) []string {
+	extractNames := func(opts []any) []string {
 		var names []string
 		for _, opt := range opts {
 			if tdOpt, ok := opt.(*testDialOption); ok {
@@ -360,13 +401,13 @@ func (s) TestPool_SharedClientChildDialOptions(t *testing.T) {
 		t.Errorf("control plane stream interceptor caller = %q, want %q", call.caller, caller1Name)
 	}
 
-	// Verify recursive option insertion on the created control plane ClientConn.
-	//
-	// TODO: Remove this ChildDialOptionsFromClientConn workaround once
-	// ClientConn and the xDS resolver propagate child dial options to resolvers
-	// and nested xDS channels.
-	getChildOpts := grpcinternal.ChildDialOptionsFromClientConn.(func(*grpc.ClientConn) []grpc.DialOption)
-	gotCCChildOptNames := extractNames(getChildOpts(call.cc))
+	// Verify recursive option insertion on the created control plane ClientConn
+	// via the resolver's BuildOptions.
+	bOptsVal, err := resolverBuildOptsCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("Timeout waiting for resolver Build() on control plane ClientConn: %v", err)
+	}
+	gotCCChildOptNames := extractNames(bOptsVal.(resolver.BuildOptions).ChildDialOptions)
 	if diff := cmp.Diff([]string{caller1Name}, gotCCChildOptNames); diff != "" {
 		t.Errorf("recursive ChildDialOptions on control plane ClientConn mismatch (-want +got):\n%s", diff)
 	}

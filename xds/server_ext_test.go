@@ -530,3 +530,56 @@ func (s) TestServer_MultipleServers_DifferentBootstrapConfigurations(t *testing.
 		t.Errorf("Connected to wrong peer: %s, want %s", peer2.Addr, lis2.Addr())
 	}
 }
+
+// Tests that dial options passed via grpc.ChildChannelOptions to
+// xds.NewGRPCServer are propagated to the xDS client pool and executed on the
+// server's ADS stream to the control plane.
+func (s) TestServer_ChildChannelOptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	managementServer := e2e.StartManagementServer(t, e2e.ManagementServerOptions{})
+
+	nodeID := uuid.New().String()
+	bootstrapContents := e2e.DefaultBootstrapContents(t, nodeID, managementServer.Address)
+
+	lis, err := testutils.LocalTCPListener()
+	if err != nil {
+		t.Fatalf("Failed to listen to local port: %v", err)
+	}
+
+	adsStreamMethodCh := make(chan string, 1)
+	childStreamInt := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		select {
+		case adsStreamMethodCh <- method:
+		default:
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+
+	config, err := bootstrap.NewConfigFromContents(bootstrapContents)
+	if err != nil {
+		t.Fatalf("Failed to parse bootstrap contents: %s, %v", string(bootstrapContents), err)
+	}
+	pool := xdsclient.NewPool(config)
+	modeChangeOpt := xds.ServingModeCallback(func(addr net.Addr, args xds.ServingModeChangeArgs) {
+		t.Logf("Serving mode for listener %q changed to %q, err: %v", addr.String(), args.Mode, args.Err)
+	})
+	createStubServer(
+		t,
+		lis,
+		modeChangeOpt,
+		xds.ClientPoolForTesting(pool),
+		grpc.ChildChannelOptions(grpc.WithStreamInterceptor(childStreamInt)),
+	)
+
+	const wantADSMethod = "/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources"
+	select {
+	case gotMethod := <-adsStreamMethodCh:
+		if gotMethod != wantADSMethod {
+			t.Fatalf("Child stream interceptor invoked for method %q, want %q", gotMethod, wantADSMethod)
+		}
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for child stream interceptor to be invoked on server ADS stream")
+	}
+}

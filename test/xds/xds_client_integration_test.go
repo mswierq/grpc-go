@@ -90,6 +90,82 @@ func (s) TestClientSideXDS(t *testing.T) {
 	}
 }
 
+// TestClientSideXDS_ChildChannelOptions verifies that dial options passed via
+// grpc.WithChildChannelOptions on an xDS client channel are propagated by the
+// xDS resolver to the xDS client pool and executed on the ADS stream to the
+// control plane, without being executed on parent data plane RPCs.
+func (s) TestClientSideXDS_ChildChannelOptions(t *testing.T) {
+	managementServer, nodeID, _, xdsResolver := setup.ManagementServerAndResolver(t)
+
+	server := stubserver.StartTestService(t, nil)
+	defer server.Stop()
+
+	const serviceName = "my-service-client-side-xds"
+	resources := e2e.DefaultClientResources(e2e.ResourceParams{
+		DialTarget: serviceName,
+		NodeID:     nodeID,
+		Host:       "localhost",
+		Port:       testutils.ParsePort(t, server.Address),
+		SecLevel:   e2e.SecurityLevelNone,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	if err := managementServer.Update(ctx, resources); err != nil {
+		t.Fatal(err)
+	}
+
+	// childStreamInt verifies that child channel options are applied to the
+	// control plane channel (which uses a streaming RPC for ADS), while
+	// childUnaryInt verifies that child channel options are not applied to the
+	// parent channel (which executes the unary EmptyCall RPC).
+	adsStreamMethodCh := make(chan string, 1)
+	childStreamInt := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		select {
+		case adsStreamMethodCh <- method:
+		default:
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+	var childUnaryCalled bool
+	childUnaryInt := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		childUnaryCalled = true
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+
+	cc, err := grpc.NewClient(
+		fmt.Sprintf("xds:///%s", serviceName),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithResolvers(xdsResolver),
+		grpc.WithChildChannelOptions(
+			grpc.WithStreamInterceptor(childStreamInt),
+			grpc.WithUnaryInterceptor(childUnaryInt),
+		),
+	)
+	if err != nil {
+		t.Fatalf("failed to dial local test server: %v", err)
+	}
+	defer cc.Close()
+
+	client := testgrpc.NewTestServiceClient(cc)
+	if _, err := client.EmptyCall(ctx, &testpb.Empty{}, grpc.WaitForReady(true)); err != nil {
+		t.Fatalf("rpc EmptyCall() failed: %v", err)
+	}
+
+	const wantADSMethod = "/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources"
+	select {
+	case gotMethod := <-adsStreamMethodCh:
+		if gotMethod != wantADSMethod {
+			t.Fatalf("Child stream interceptor invoked for method %q, want %q", gotMethod, wantADSMethod)
+		}
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for child stream interceptor to be invoked on ADS stream")
+	}
+
+	if childUnaryCalled {
+		t.Fatal("Child unary interceptor was unexpectedly invoked on parent channel RPC")
+	}
+}
+
 // TestClient_ConcurrentRPC ensures thread safety for xDS clients executing
 // concurrent RPCs, particularly verifying that the regex matchers do not cause
 // data races.

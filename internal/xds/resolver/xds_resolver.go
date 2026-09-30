@@ -55,15 +55,16 @@ const Scheme = "xds"
 // the provided config and a new xDS client in that pool.
 func newBuilderWithConfigForTesting(config []byte) (resolver.Builder, error) {
 	return &xdsResolverBuilder{
-		newXDSClient: func(name string, mr estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
+		newXDSClient: func(name string, mr estats.MetricsRecorder, childDialOptions []grpc.DialOption) (xdsclient.XDSClient, func(), error) {
 			config, err := bootstrap.NewConfigFromContents(config)
 			if err != nil {
 				return nil, nil, err
 			}
 			pool := xdsclient.NewPool(config)
 			return pool.NewClientForTesting(xdsclient.OptionsForTesting{
-				Name:            name,
-				MetricsRecorder: mr,
+				Name:             name,
+				MetricsRecorder:  mr,
+				ChildDialOptions: childDialOptions,
 			})
 		},
 	}, nil
@@ -74,10 +75,11 @@ func newBuilderWithConfigForTesting(config []byte) (resolver.Builder, error) {
 // specific xds client pool being used.
 func newBuilderWithPoolForTesting(pool *xdsclient.Pool) (resolver.Builder, error) {
 	return &xdsResolverBuilder{
-		newXDSClient: func(name string, mr estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
+		newXDSClient: func(name string, mr estats.MetricsRecorder, childDialOptions []grpc.DialOption) (xdsclient.XDSClient, func(), error) {
 			return pool.NewClientForTesting(xdsclient.OptionsForTesting{
-				Name:            name,
-				MetricsRecorder: mr,
+				Name:             name,
+				MetricsRecorder:  mr,
+				ChildDialOptions: childDialOptions,
 			})
 		},
 	}, nil
@@ -88,7 +90,7 @@ func newBuilderWithPoolForTesting(pool *xdsclient.Pool) (resolver.Builder, error
 // specific xDS client being used.
 func newBuilderWithClientForTesting(client xdsclient.XDSClient) (resolver.Builder, error) {
 	return &xdsResolverBuilder{
-		newXDSClient: func(string, estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
+		newXDSClient: func(string, estats.MetricsRecorder, []grpc.DialOption) (xdsclient.XDSClient, func(), error) {
 			// Returning an empty close func here means that the responsibility
 			// of closing the client lies with the caller.
 			return client, func() {}, nil
@@ -103,16 +105,11 @@ func init() {
 	internal.NewXDSResolverWithClientForTesting = newBuilderWithClientForTesting
 
 	rinternal.NewWRR = wrr.NewRandom
-	// TODO: Remove this wrapper and assign xdsclient.DefaultPool.NewClient
-	// directly once rinternal.NewXDSClient and xdsResolverBuilder.newXDSClient
-	// are updated to accept child dial options.
-	rinternal.NewXDSClient = func(target string, mr estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
-		return xdsclient.DefaultPool.NewClient(target, mr, nil)
-	}
+	rinternal.NewXDSClient = xdsclient.DefaultPool.NewClient
 }
 
 type xdsResolverBuilder struct {
-	newXDSClient func(string, estats.MetricsRecorder) (xdsclient.XDSClient, func(), error)
+	newXDSClient func(string, estats.MetricsRecorder, []grpc.DialOption) (xdsclient.XDSClient, func(), error)
 }
 
 // Build helps implement the resolver.Builder interface.
@@ -121,11 +118,15 @@ type xdsResolverBuilder struct {
 // time an xds resolver is built.
 func (b *xdsResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (_ resolver.Resolver, retErr error) {
 	// Initialize the xDS client.
-	newXDSClient := rinternal.NewXDSClient.(func(string, estats.MetricsRecorder) (xdsclient.XDSClient, func(), error))
+	newXDSClient := rinternal.NewXDSClient.(func(string, estats.MetricsRecorder, []grpc.DialOption) (xdsclient.XDSClient, func(), error))
 	if b.newXDSClient != nil {
 		newXDSClient = b.newXDSClient
 	}
-	client, xdsClientClose, err := newXDSClient(target.String(), opts.MetricsRecorder)
+	childDialOpts := make([]grpc.DialOption, len(opts.ChildDialOptions))
+	for i, opt := range opts.ChildDialOptions {
+		childDialOpts[i] = opt.(grpc.DialOption)
+	}
+	client, xdsClientClose, err := newXDSClient(target.String(), opts.MetricsRecorder, childDialOpts)
 	if err != nil {
 		return nil, fmt.Errorf("xds: failed to create xds-client: %v", err)
 	}

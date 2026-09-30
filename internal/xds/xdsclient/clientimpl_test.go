@@ -31,7 +31,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	grpcinternal "google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/envconfig"
 	"google.golang.org/grpc/internal/testutils"
 	"google.golang.org/grpc/internal/testutils/stats"
@@ -41,6 +40,8 @@ import (
 	"google.golang.org/grpc/internal/xds/clients/xdsclient"
 	"google.golang.org/grpc/internal/xds/xdsclient/xdsresource"
 	"google.golang.org/grpc/internal/xds/xdsclient/xdsresource/version"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
 	xdsbootstrap "google.golang.org/grpc/xds/bootstrap"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -477,8 +478,14 @@ func (s) TestPopulateGRPCTransportConfigsFromServerConfig_ChildDialOptions(t *te
 		t.Fatalf("Missing entry in grpcTransportConfigs for %q", credsName)
 	}
 
+	resolverBuildOptsCh := make(chan resolver.BuildOptions, 1)
+	rb := manual.NewBuilderWithScheme("custom")
+	rb.BuildCallback = func(_ resolver.Target, _ resolver.ClientConn, opts resolver.BuildOptions) {
+		resolverBuildOptsCh <- opts
+	}
+
 	transportOpt := grpc.WithChainUnaryInterceptor(recordChainInt(transportOptName, false))
-	cc, err := transportCfg.GRPCNewClient("passthrough:///xds-server:443", transportOpt, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	cc, err := transportCfg.GRPCNewClient("custom:///xds-server:443", transportOpt, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithResolvers(rb))
 	if err != nil {
 		t.Fatalf("GRPCNewClient() failed: %v", err)
 	}
@@ -500,16 +507,17 @@ func (s) TestPopulateGRPCTransportConfigsFromServerConfig_ChildDialOptions(t *te
 	}
 
 	// Verify multi-level recursive option insertion on the created ClientConn:
-	// cc.dopts.childDialOptions must contain childDialOptions (overwriting the
+	// the resolver built on cc must receive childDialOptions (overwriting the
 	// nested WithChildChannelOptions inside childDialOptions).
-	//
-	// TODO: Remove this ChildDialOptionsFromClientConn workaround once
-	// ClientConn and the xDS resolver propagate child dial options to resolvers
-	// and nested xDS channels.
-	getChildOpts := grpcinternal.ChildDialOptionsFromClientConn.(func(*grpc.ClientConn) []grpc.DialOption)
-	ccChildOpts := getChildOpts(cc)
+	cc.Connect()
+	var gotBuildOpts resolver.BuildOptions
+	select {
+	case gotBuildOpts = <-resolverBuildOptsCh:
+	case <-ctx.Done():
+		t.Fatalf("Timeout waiting for resolver Build() on ClientConn")
+	}
 	var ccChildOptNames []string
-	for _, opt := range ccChildOpts {
+	for _, opt := range gotBuildOpts.ChildDialOptions {
 		if tdOpt, ok := opt.(*testDialOption); ok {
 			ccChildOptNames = append(ccChildOptNames, tdOpt.name)
 		}

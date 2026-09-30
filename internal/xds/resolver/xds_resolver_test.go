@@ -32,6 +32,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	estats "google.golang.org/grpc/experimental/stats"
 	"google.golang.org/grpc/internal"
@@ -257,7 +258,7 @@ func (s) TestResolverCloseClosesXDSClient(t *testing.T) {
 	// client is closed.
 	origNewClient := rinternal.NewXDSClient
 	closeCh := make(chan struct{})
-	rinternal.NewXDSClient = func(string, estats.MetricsRecorder) (xdsclient.XDSClient, func(), error) {
+	rinternal.NewXDSClient = func(string, estats.MetricsRecorder, []grpc.DialOption) (xdsclient.XDSClient, func(), error) {
 		bc := e2e.DefaultBootstrapContents(t, uuid.New().String(), "dummy-management-server-address")
 		config, err := bootstrap.NewConfigFromContents(bc)
 		if err != nil {
@@ -282,6 +283,62 @@ func (s) TestResolverCloseClosesXDSClient(t *testing.T) {
 	case <-closeCh:
 	case <-time.After(defaultTestTimeout):
 		t.Fatal("Timeout when waiting for xDS client to be closed")
+	}
+}
+
+// Tests that the xDS resolver builder extracts ChildDialOptions from
+// resolver.BuildOptions and passes them to xdsclient.DefaultPool.NewClient,
+// which applies them to the child channel connecting to the control plane.
+func (s) TestResolverBuilder_ChildDialOptions(t *testing.T) {
+	bc := e2e.DefaultBootstrapContents(t, uuid.New().String(), "dummy-management-server-address")
+	config, err := bootstrap.NewConfigFromContents(bc)
+	if err != nil {
+		t.Fatalf("Failed to parse bootstrap contents: %s, %v", string(bc), err)
+	}
+	xdsclient.DefaultPool.SetFallbackBootstrapConfig(config)
+	defer xdsclient.DefaultPool.UnsetBootstrapConfigForTesting()
+
+	builder := resolver.Get("xds")
+	if builder == nil {
+		t.Fatal(`Scheme "xds" is not registered`)
+	}
+
+	// Configure a stream interceptor as a child dial option. If the resolver
+	// forwards ChildDialOptions to DefaultPool.NewClient, the xDS client will
+	// apply this interceptor to its child gRPC channel to the management server.
+	adsStreamMethodCh := make(chan string, 1)
+	childStreamInt := grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		select {
+		case adsStreamMethodCh <- method:
+		default:
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	})
+
+	// Building the resolver acquires the xDS client from DefaultPool and starts
+	// watching the LDS resource, which triggers creation of the ADS stream on
+	// the control plane child channel.
+	target := resolver.Target{URL: *testutils.MustParseURL("xds:///my-service-client-side-xds")}
+	tcc := &testutils.ResolverClientConn{Logger: t}
+	r, err := builder.Build(target, tcc, resolver.BuildOptions{
+		Authority:        url.PathEscape(target.Endpoint()),
+		ChildDialOptions: []any{childStreamInt},
+	})
+	if err != nil {
+		t.Fatalf("Failed to build xDS resolver for target %q: %v", target, err)
+	}
+	defer r.Close()
+
+	// Verify that the child stream interceptor was executed when opening the
+	// ADS stream to the management server.
+	const wantADSMethod = "/envoy.service.discovery.v3.AggregatedDiscoveryService/StreamAggregatedResources"
+	select {
+	case gotMethod := <-adsStreamMethodCh:
+		if gotMethod != wantADSMethod {
+			t.Fatalf("Child stream interceptor invoked for method %q, want %q", gotMethod, wantADSMethod)
+		}
+	case <-time.After(defaultTestTimeout):
+		t.Fatal("Timeout waiting for child stream interceptor to be invoked on ADS stream")
 	}
 }
 
