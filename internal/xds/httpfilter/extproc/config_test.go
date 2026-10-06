@@ -121,7 +121,7 @@ func testParseOptions(t *testing.T, targets ...string) httpfilter.ParseOptions {
 func overrideCreateExtProcChannelWithError(t *testing.T) {
 	t.Helper()
 	origCreateExtProcChannel := iextproc.CreateExtProcChannel
-	iextproc.CreateExtProcChannel = func(*grpcservice.Config) (grpc.ClientConnInterface, func(), error) {
+	iextproc.CreateExtProcChannel = func(*grpcservice.Config, []grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
 		return nil, nil, fmt.Errorf("dial error")
 	}
 	t.Cleanup(func() { iextproc.CreateExtProcChannel = origCreateExtProcChannel })

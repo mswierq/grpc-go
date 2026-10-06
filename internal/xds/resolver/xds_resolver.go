@@ -150,6 +150,7 @@ func (b *xdsResolverBuilder) Build(target resolver.Target, cc resolver.ClientCon
 		ldsResourceName: ldsResourceName,
 		target:          target.String(),
 		metricsRecorder: opts.MetricsRecorder,
+		childDialOpts:   childDialOpts,
 
 		// serializer used to synchronize the following:
 		// - updates from the dependency manager. This could lead to generation
@@ -243,6 +244,7 @@ type xdsResolver struct {
 	channelID       uint64 // Unique random ID for the channel owning this resolver.
 	target          string
 	metricsRecorder estats.MetricsRecorder
+	childDialOpts   []grpc.DialOption // Child dial options of the parent channel, passed to HTTP filters.
 
 	// All methods on the xdsResolver type except for the ones invoked by gRPC,
 	// i.e ResolveNow() and Close(), are guaranteed to execute in the context of
@@ -708,9 +710,10 @@ func (r *xdsResolver) getOrCreateClientFilter(builder httpfilter.ClientFilterBui
 	}
 
 	cf := builder.BuildClientFilter(httpfilter.ClientFilterOptions{
-		FilterName:      key.name,
-		MetricsRecorder: r.metricsRecorder,
-		Target:          r.target,
+		FilterName:       key.name,
+		MetricsRecorder:  r.metricsRecorder,
+		Target:           r.target,
+		ChildDialOptions: r.childDialOpts,
 	})
 	r.httpFilters[key] = cf
 	return cf

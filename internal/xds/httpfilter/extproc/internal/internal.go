@@ -31,8 +31,26 @@ var (
 	// server described by the given config. The returned function closes the
 	// channel. It is a variable so that tests can intercept channel creation
 	// and observe its release.
-	CreateExtProcChannel = func(server *grpcservice.Config) (grpc.ClientConnInterface, func(), error) {
-		conn, err := server.Dial()
+	//
+	// childDialOpts are the child channel dial options configured on the
+	// parent channel (via grpc.WithChildChannelOptions). They are applied to
+	// the created channel and are also propagated to any of its own child
+	// channels. In case of conflicts, the configuration from the filter's
+	// GrpcService takes precedence:
+	//   - The channel credentials from the config always replace any
+	//     transport credentials or credentials bundle set in childDialOpts
+	//     (enforced by grpcservice.Config.Dial).
+	//   - The call credentials from the config are always applied.
+	//   - The timeout and initial metadata from the config are applied per
+	//     RPC, and are not affected by childDialOpts.
+	CreateExtProcChannel = func(server *grpcservice.Config, childDialOpts []grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
+		var opts []grpc.DialOption
+		if len(childDialOpts) > 0 {
+			opts = make([]grpc.DialOption, 0, len(childDialOpts)+1)
+			opts = append(opts, childDialOpts...)
+			opts = append(opts, grpc.WithChildChannelOptions(childDialOpts...))
+		}
+		conn, err := server.Dial(opts...)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -89,14 +89,23 @@ func (c *Config) Close() {
 // Dial creates a channel to the side-channel service, using the channel and
 // call credentials from the config along with the provided dial options.
 //
+// The channel credentials from the config always take precedence: any
+// transport credentials or credentials bundle set by the provided dial options
+// are replaced by them.
+//
 // Dial does not take ownership of the config: the caller releases the
 // config's credentials via Close when the config is no longer needed, after
 // closing any channel created from it.
 func (c *Config) Dial(opts ...grpc.DialOption) (*grpc.ClientConn, error) {
 	// The credentials are appended after the provided options so that they
 	// cannot be overridden.
-	dialOpts := make([]grpc.DialOption, 0, len(opts)+len(c.CallCredentials)+1)
+	dialOpts := make([]grpc.DialOption, 0, len(opts)+len(c.CallCredentials)+2)
 	dialOpts = append(dialOpts, opts...)
+	// Clear any transport credentials set by the provided options (passing nil
+	// resets the field): a credentials bundle cannot be used together with
+	// individual transport credentials, so channel creation would otherwise
+	// fail instead of the config's bundle taking precedence.
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(nil))
 	dialOpts = append(dialOpts, grpc.WithCredentialsBundle(c.ChannelCredentials.Bundle()))
 	for _, cc := range c.CallCredentials {
 		dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(cc.Credentials()))

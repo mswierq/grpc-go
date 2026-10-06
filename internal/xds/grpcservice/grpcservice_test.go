@@ -20,6 +20,7 @@ package grpcservice
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -391,6 +392,34 @@ func (s) TestConfigDialTLS(t *testing.T) {
 
 	// The backend certificate's SANs cover x.test.example.com.
 	cc, err := cfg.Dial(grpc.WithAuthority("x.test.example.com"))
+	if err != nil {
+		t.Fatalf("Dial() returned unexpected error: %v", err)
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	if _, err := testgrpc.NewTestServiceClient(cc).EmptyCall(ctx, &testpb.Empty{}); err != nil {
+		t.Fatalf("EmptyCall() failed: %v", err)
+	}
+}
+
+// Tests that the config's channel credentials take precedence over transport
+// credentials set by the dial options passed to Dial: the config carries
+// insecure credentials while the dial options carry TLS credentials, which
+// would fail the handshake with the plaintext backend if they were applied.
+func (s) TestConfigDialOverridesTransportCredentials(t *testing.T) {
+	backend := stubserver.StartTestService(t, nil)
+	defer backend.Stop()
+
+	gs := googleGrpcService(backend.Address, []*anypb.Any{{TypeUrl: insecureCredsTypeURL}}, nil, nil)
+	cfg, err := Parse(gs, bootstrapConfig(t, "{}"), trustedServerConfig(t))
+	if err != nil {
+		t.Fatalf("Parse() returned unexpected error: %v", err)
+	}
+	defer cfg.Close()
+
+	cc, err := cfg.Dial(grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
 	if err != nil {
 		t.Fatalf("Dial() returned unexpected error: %v", err)
 	}
