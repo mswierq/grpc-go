@@ -231,8 +231,9 @@ func (builder) IsTerminal() bool {
 
 func (builder) BuildClientFilter(opts httpfilter.ClientFilterOptions) httpfilter.ClientFilter {
 	return &clientFilter{
-		metricsRecorder: opts.MetricsRecorder,
-		target:          opts.Target,
+		metricsRecorder:  opts.MetricsRecorder,
+		target:           opts.Target,
+		childDialOptions: opts.ChildDialOptions,
 	}
 }
 
@@ -250,6 +251,9 @@ type procChannelEntry struct {
 type clientFilter struct {
 	metricsRecorder estats.MetricsRecorder
 	target          string
+	// childDialOptions are the child channel dial options of the parent
+	// channel, applied to the channels to the external processor servers.
+	childDialOptions []grpc.DialOption
 
 	mu           sync.Mutex
 	procChannels []*procChannelEntry
@@ -322,7 +326,7 @@ func (cf *clientFilter) getOrCreateExtProcChannel(server *grpcservice.Config) (*
 
 	// Create the external processor channel without holding the lock. The
 	// release function closes the channel.
-	cc, release, err := iextproc.CreateExtProcChannel(server)
+	cc, release, err := iextproc.CreateExtProcChannel(server, cf.childDialOptions)
 	if err != nil {
 		return nil, fmt.Errorf("extproc: failed to create channel to the external processor server %q: %v", server.TargetURI, err)
 	}

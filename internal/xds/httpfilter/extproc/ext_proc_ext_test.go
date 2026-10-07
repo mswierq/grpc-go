@@ -20,8 +20,10 @@ package extproc_test
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +33,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcinternal "google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/envconfig"
@@ -44,8 +47,11 @@ import (
 	"google.golang.org/grpc/internal/xds/bootstrap"
 	"google.golang.org/grpc/internal/xds/grpcservice"
 	"google.golang.org/grpc/internal/xds/httpfilter/extproc/internal"
+	"google.golang.org/grpc/internal/xds/xdsclient"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
+	grpcstats "google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -4834,7 +4840,7 @@ func (s) TestExtProcChannelRetention(t *testing.T) {
 
 			// Override CreateExtProcChannel to signal when the channel is closed.
 			origCreate := internal.CreateExtProcChannel
-			internal.CreateExtProcChannel = func(cfg *grpcservice.Config) (grpc.ClientConnInterface, func(), error) {
+			internal.CreateExtProcChannel = func(cfg *grpcservice.Config, _ []grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
 				cc, err := grpc.NewClient(cfg.TargetURI, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					return nil, nil, err
@@ -4952,7 +4958,7 @@ func (s) TestExtProcChannelRetention_XDSConfigUpdate(t *testing.T) {
 			// Override CreateExtProcChannel to signal when a channel is closed and
 			// dial to correct proc server.
 			origCreate := internal.CreateExtProcChannel
-			internal.CreateExtProcChannel = func(cfg *grpcservice.Config) (grpc.ClientConnInterface, func(), error) {
+			internal.CreateExtProcChannel = func(cfg *grpcservice.Config, _ []grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
 				cc, err := grpc.NewClient(cfg.TargetURI, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					return nil, nil, err
@@ -5133,7 +5139,7 @@ func (s) TestExtProcChannelRetention_UnaryRPC(t *testing.T) {
 
 			// Override CreateExtProcChannel to signal when the channel is closed.
 			origCreate := internal.CreateExtProcChannel
-			internal.CreateExtProcChannel = func(cfg *grpcservice.Config) (grpc.ClientConnInterface, func(), error) {
+			internal.CreateExtProcChannel = func(cfg *grpcservice.Config, _ []grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
 				cc, err := grpc.NewClient(cfg.TargetURI, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					return nil, nil, err
@@ -6790,15 +6796,10 @@ func (s) TestFlowControl_PiggybackedWindowUpdates(t *testing.T) {
 	}
 }
 
-// TestUntrustedServerAllowedGRPCServices tests the ext_proc filter when the
-// xDS server is not configured with the trusted_xds_server feature. On this
-// path the credentials in the GrpcService proto are ignored, and the filter
-// config is accepted only because the external processor's target is present
-// in the bootstrap allowed_grpc_services map, whose credentials are used for
-// the side channel (gRFC A102). Verifies that a data-plane RPC flows through
-// the external processor end-to-end.
-func (s) TestUntrustedServerAllowedGRPCServices(t *testing.T) {
-	const mutatedHeader = "request-mutated"
+// startHeaderMutatingExtProcessor starts a test external processor server that
+// responds to request headers by adding the given header with value "true".
+func startHeaderMutatingExtProcessor(t *testing.T, mutatedHeader string) string {
+	t.Helper()
 	lisAddr, _ := startTestExtProcessor(t, func(stream v3procservicegrpc.ExternalProcessor_ProcessServer) error {
 		for {
 			req, err := stream.Recv()
@@ -6816,22 +6817,37 @@ func (s) TestUntrustedServerAllowedGRPCServices(t *testing.T) {
 			}
 		}
 	})
+	return lisAddr
+}
 
-	// Start a test backend that verifies the header mutation performed by the
-	// external processor.
+// startHeaderVerifyingBackend starts a test backend that verifies that the
+// given header was added by the external processor.
+func startHeaderVerifyingBackend(t *testing.T, mutatedHeader string) *stubserver.StubServer {
+	t.Helper()
 	stub := stubserver.StartTestService(t, &stubserver.StubServer{
 		UnaryCallF: func(ctx context.Context, _ *testpb.SimpleRequest) (*testpb.SimpleResponse, error) {
-			md, ok := metadata.FromIncomingContext(ctx)
-			if !ok {
-				return nil, fmt.Errorf("server did not receive incoming metadata")
-			}
+			md, _ := metadata.FromIncomingContext(ctx)
 			if vals := md.Get(mutatedHeader); len(vals) == 0 || vals[0] != "true" {
 				return nil, fmt.Errorf("missing or invalid %q header: %v", mutatedHeader, vals)
 			}
 			return &testpb.SimpleResponse{}, nil
 		},
 	})
-	defer stub.Stop()
+	t.Cleanup(stub.Stop)
+	return stub
+}
+
+// TestUntrustedServerAllowedGRPCServices tests the ext_proc filter when the
+// xDS server is not configured with the trusted_xds_server feature. On this
+// path the credentials in the GrpcService proto are ignored, and the filter
+// config is accepted only because the external processor's target is present
+// in the bootstrap allowed_grpc_services map, whose credentials are used for
+// the side channel (gRFC A102). Verifies that a data-plane RPC flows through
+// the external processor end-to-end.
+func (s) TestUntrustedServerAllowedGRPCServices(t *testing.T) {
+	const mutatedHeader = "request-mutated"
+	lisAddr := startHeaderMutatingExtProcessor(t, mutatedHeader)
+	stub := startHeaderVerifyingBackend(t, mutatedHeader)
 
 	// Create bootstrap configuration without the trusted_xds_server server
 	// feature, and with the external processor's target present in the
@@ -6857,6 +6873,188 @@ func (s) TestUntrustedServerAllowedGRPCServices(t *testing.T) {
 			ResponseHeaderMode: v3procfilterpb.ProcessingMode_SKIP,
 		},
 	}, stub.Address)
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	client := testgrpc.NewTestServiceClient(cc)
+	if _, err := client.UnaryCall(ctx, &testpb.SimpleRequest{}); err != nil {
+		t.Fatalf("UnaryCall() failed: %v", err)
+	}
+}
+
+// TestChildChannelOptions_AppliedToExtProcChannel verifies that dial options
+// passed via grpc.WithChildChannelOptions on an xDS client channel are applied
+// to the channel created by the ext_proc filter to the external processor
+// server: a logging stream interceptor and a telemetry stats handler both
+// observe the Process stream. It also verifies that the child channel options
+// are not applied to the parent channel's data plane RPCs.
+func (s) TestChildChannelOptions_AppliedToExtProcChannel(t *testing.T) {
+	const mutatedHeader = "request-mutated"
+	lisAddr := startHeaderMutatingExtProcessor(t, mutatedHeader)
+	stub := startHeaderVerifyingBackend(t, mutatedHeader)
+
+	// Other child RPCs (e.g. the ADS stream to the management server, which
+	// also uses the child channel options) are ignored by the latches below.
+	const processMethod = v3procservicegrpc.ExternalProcessor_Process_FullMethodName
+
+	// Logging interceptor that fires when it observes the Process stream.
+	interceptorSawProcess := grpcsync.NewEvent()
+	childStreamInt := func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		if method == processMethod {
+			interceptorSawProcess.Fire()
+		}
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+	// The data plane UnaryCall is the only unary RPC in this test, and it
+	// is executed on the parent channel where child options must not apply.
+	var childUnaryCalled atomic.Bool
+	childUnaryInt := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		childUnaryCalled.Store(true)
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+	// Telemetry stats handler that fires when it observes the Process stream.
+	statsHandlerSawProcess := grpcsync.NewEvent()
+	sh := &testutils.StubStatsHandler{
+		TagRPCF: func(ctx context.Context, info *grpcstats.RPCTagInfo) context.Context {
+			if info.FullMethodName == processMethod {
+				statsHandlerSawProcess.Fire()
+			}
+			return ctx
+		},
+	}
+
+	cc, err := setupTestClient(t, lisAddr, &v3procfilterpb.ExternalProcessor{
+		ProcessingMode: &v3procfilterpb.ProcessingMode{
+			RequestHeaderMode:  v3procfilterpb.ProcessingMode_SEND,
+			ResponseHeaderMode: v3procfilterpb.ProcessingMode_SKIP,
+		},
+	}, stub.Address, grpc.WithChildChannelOptions(
+		grpc.WithStreamInterceptor(childStreamInt),
+		grpc.WithUnaryInterceptor(childUnaryInt),
+		grpc.WithStatsHandler(sh),
+	))
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	client := testgrpc.NewTestServiceClient(cc)
+	if _, err := client.UnaryCall(ctx, &testpb.SimpleRequest{}); err != nil {
+		t.Fatalf("UnaryCall() failed: %v", err)
+	}
+
+	// The filter creates the Process stream synchronously, before the data
+	// plane stream, so both latches must have fired once UnaryCall returns.
+	if !interceptorSawProcess.HasFired() {
+		t.Errorf("Child stream interceptor did not observe method %q", processMethod)
+	}
+	if !statsHandlerSawProcess.HasFired() {
+		t.Errorf("Child stats handler did not observe method %q", processMethod)
+	}
+	if childUnaryCalled.Load() {
+		t.Error("Child unary interceptor was unexpectedly invoked on parent channel RPC")
+	}
+}
+
+// TestChildChannelOptions_PropagatedRecursivelyByExtProcChannel verifies that
+// the channel created by the ext_proc filter to the external processor server
+// propagates the child channel options to its own child components, by
+// checking that the name resolver of the external processor channel receives
+// them in its build options.
+func (s) TestChildChannelOptions_PropagatedRecursivelyByExtProcChannel(t *testing.T) {
+	const mutatedHeader = "request-mutated"
+	lisAddr := startHeaderMutatingExtProcessor(t, mutatedHeader)
+	stub := startHeaderVerifyingBackend(t, mutatedHeader)
+
+	// Use a manual resolver, provided only via the child channel options, to
+	// resolve the target of the external processor server.
+	const extProcScheme = "extproc-child-options-test"
+	mr := manual.NewBuilderWithScheme(extProcScheme)
+	mr.InitialState(resolver.State{Addresses: []resolver.Address{{Addr: lisAddr}}})
+	var gotChildOpts atomic.Pointer[[]any]
+	mr.BuildCallback = func(_ resolver.Target, _ resolver.ClientConn, opts resolver.BuildOptions) {
+		gotChildOpts.Store(&opts.ChildDialOptions)
+	}
+	childOpts := []grpc.DialOption{
+		grpc.WithResolvers(mr),
+		grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			return streamer(ctx, desc, cc, method, opts...)
+		}),
+	}
+
+	cc, err := setupTestClient(t, extProcScheme+":///ext-proc-server", &v3procfilterpb.ExternalProcessor{
+		ProcessingMode: &v3procfilterpb.ProcessingMode{
+			RequestHeaderMode:  v3procfilterpb.ProcessingMode_SEND,
+			ResponseHeaderMode: v3procfilterpb.ProcessingMode_SKIP,
+		},
+	}, stub.Address, grpc.WithChildChannelOptions(childOpts...))
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	client := testgrpc.NewTestServiceClient(cc)
+	if _, err := client.UnaryCall(ctx, &testpb.SimpleRequest{}); err != nil {
+		t.Fatalf("UnaryCall() failed: %v", err)
+	}
+
+	gotOptsPtr := gotChildOpts.Load()
+	if gotOptsPtr == nil {
+		t.Fatal("External processor channel resolver was not built")
+	}
+	// DialOptions are pointers, so they are compared by identity.
+	gotOpts := *gotOptsPtr
+	if !slices.EqualFunc(gotOpts, childOpts, func(got any, want grpc.DialOption) bool { return got == want }) {
+		t.Fatalf("External processor channel resolver got child dial options %v, want %v", gotOpts, childOpts)
+	}
+}
+
+// TestChildChannelOptions_FilterCredentialsTakePrecedence verifies that the
+// channel credentials specified in the ext_proc filter's GrpcService config
+// take precedence over transport credentials specified in the child channel
+// options. The child channel options carry TLS credentials, which would fail
+// the handshake with the plaintext external processor server if applied, and
+// the filter is configured to fail closed.
+func (s) TestChildChannelOptions_FilterCredentialsTakePrecedence(t *testing.T) {
+	const mutatedHeader = "request-mutated"
+	lisAddr := startHeaderMutatingExtProcessor(t, mutatedHeader)
+	stub := startHeaderVerifyingBackend(t, mutatedHeader)
+
+	// Create an xDS client without child dial options, and a resolver using
+	// it, so that the child channel options from the parent channel do not
+	// affect the channel to the management server.
+	managementServer := e2e.StartManagementServer(t, e2e.ManagementServerOptions{AllowResourceSubset: true})
+	nodeID := uuid.New().String()
+	bc := e2e.DefaultBootstrapContents(t, nodeID, managementServer.Address)
+	config, err := bootstrap.NewConfigFromContents(bc)
+	if err != nil {
+		t.Fatalf("Failed to parse bootstrap contents: %s, %v", string(bc), err)
+	}
+	xdsClient, xdsClose, err := xdsclient.NewPool(config).NewClientForTesting(xdsclient.OptionsForTesting{Name: t.Name()})
+	if err != nil {
+		t.Fatalf("Failed to create an xDS client: %v", err)
+	}
+	defer xdsClose()
+	xdsResolver, err := grpcinternal.NewXDSResolverWithClientForTesting.(func(xdsclient.XDSClient) (resolver.Builder, error))(xdsClient)
+	if err != nil {
+		t.Fatalf("Failed to create xDS resolver: %v", err)
+	}
+
+	cc, err := setupTestClientWithResolver(t, managementServer, nodeID, xdsResolver, lisAddr, &v3procfilterpb.ExternalProcessor{
+		ProcessingMode: &v3procfilterpb.ProcessingMode{
+			RequestHeaderMode:  v3procfilterpb.ProcessingMode_SEND,
+			ResponseHeaderMode: v3procfilterpb.ProcessingMode_SKIP,
+		},
+		FailureModeAllow: false,
+	}, stub.Address, grpc.WithChildChannelOptions(grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{}))))
 	if err != nil {
 		t.Fatalf("Failed to dial: %v", err)
 	}
