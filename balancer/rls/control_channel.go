@@ -137,13 +137,35 @@ func (cc *controlChannel) OnMessage(msg any) {
 }
 
 // dialOpts constructs the dial options for the control plane channel.
+//
+// As specified in gRFC A110, the child dial options configured on the parent
+// channel (bOpts.ChildDialOptions) are applied to the control channel and are
+// also propagated to any child channels that the control channel itself may
+// create. The child dial options are placed first so that the mandatory
+// settings required by RLS (authority, credentials, dialer and service config)
+// which are appended afterwards take precedence over them.
 func (cc *controlChannel) dialOpts(bOpts balancer.BuildOptions, serviceConfig string) ([]grpc.DialOption, error) {
+	var dopts []grpc.DialOption
+	if len(bOpts.ChildDialOptions) > 0 {
+		childOpts := make([]grpc.DialOption, 0, len(bOpts.ChildDialOptions))
+		for _, o := range bOpts.ChildDialOptions {
+			opt, ok := o.(grpc.DialOption)
+			if !ok {
+				cc.logger.Warningf("Ignoring child dial option of unexpected type %T", o)
+				continue
+			}
+			childOpts = append(childOpts, opt)
+		}
+		dopts = append(dopts, childOpts...)
+		dopts = append(dopts, grpc.WithChildChannelOptions(childOpts...))
+	}
+
 	// The control plane channel will use the same authority as the parent
 	// channel for server authorization. This ensures that the identity of the
 	// RLS server and the identity of the backends is the same, so if the RLS
 	// config is injected by an attacker, it cannot cause leakage of private
 	// information contained in headers set by the application.
-	dopts := []grpc.DialOption{grpc.WithAuthority(bOpts.Authority)}
+	dopts = append(dopts, grpc.WithAuthority(bOpts.Authority))
 	if bOpts.Dialer != nil {
 		dopts = append(dopts, grpc.WithContextDialer(bOpts.Dialer))
 	}
