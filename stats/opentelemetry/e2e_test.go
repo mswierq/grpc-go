@@ -2770,3 +2770,64 @@ func checkMetricWithMethod(ctx context.Context, reader *metric.ManualReader, met
 	}
 	return fmt.Errorf("metric %q with method %q not found", metricName, method)
 }
+
+// TestNestedCallOnDifferentChannel verifies that an RPC started on a channel
+// with the context of an in-flight RPC on another channel (as done by child
+// channels, e.g. the ext_proc filter's channel to the external processor,
+// which is used in the context of the parent channel's RPC) is recorded with
+// the target and method of its own channel, instead of those of the RPC whose
+// context it was started with.
+func (s) TestNestedCallOnDifferentChannel(t *testing.T) {
+	innerServer := stubserver.StartTestService(t, nil)
+	defer innerServer.Stop()
+	outerServer := stubserver.StartTestService(t, nil)
+	defer outerServer.Stop()
+
+	innerMO, innerReader := defaultMetricsOptions(t, nil)
+	innerTarget := "passthrough:///" + innerServer.Address
+	innerCC, err := grpc.NewClient(innerTarget, grpc.WithTransportCredentials(insecure.NewCredentials()), opentelemetry.DialOption(opentelemetry.Options{MetricsOptions: *innerMO}))
+	if err != nil {
+		t.Fatalf("grpc.NewClient(%q) failed: %v", innerTarget, err)
+	}
+	defer innerCC.Close()
+	innerClient := testgrpc.NewTestServiceClient(innerCC)
+
+	// The outer channel's interceptor runs after the OpenTelemetry
+	// interceptors, and makes an RPC on the inner channel with the context of
+	// the outer channel's RPC.
+	outerMO, _ := defaultMetricsOptions(t, nil)
+	outerTarget := "passthrough:///" + outerServer.Address
+	nestedCallInt := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if _, err := innerClient.EmptyCall(ctx, &testpb.Empty{}); err != nil {
+			return err
+		}
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+	outerCC, err := grpc.NewClient(outerTarget, grpc.WithTransportCredentials(insecure.NewCredentials()), opentelemetry.DialOption(opentelemetry.Options{MetricsOptions: *outerMO}), grpc.WithChainUnaryInterceptor(nestedCallInt))
+	if err != nil {
+		t.Fatalf("grpc.NewClient(%q) failed: %v", outerTarget, err)
+	}
+	defer outerCC.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+	if _, err := testgrpc.NewTestServiceClient(outerCC).UnaryCall(ctx, &testpb.SimpleRequest{}); err != nil {
+		t.Fatalf("UnaryCall() failed: %v", err)
+	}
+
+	m, ok := metricsDataFromReader(ctx, innerReader)["grpc.client.attempt.started"]
+	if !ok {
+		t.Fatal("Inner channel did not record metric grpc.client.attempt.started")
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok || len(sum.DataPoints) != 1 {
+		t.Fatalf("Inner channel recorded grpc.client.attempt.started data %+v, want a single int64 sum data point", m.Data)
+	}
+	wantAttrs := attribute.NewSet(
+		attribute.String("grpc.method", "grpc.testing.TestService/EmptyCall"),
+		attribute.String("grpc.target", innerTarget),
+	)
+	if got := sum.DataPoints[0].Attributes; !got.Equals(&wantAttrs) {
+		t.Fatalf("Inner channel recorded grpc.client.attempt.started with attributes %v, want %v", got.ToSlice(), wantAttrs.ToSlice())
+	}
+}

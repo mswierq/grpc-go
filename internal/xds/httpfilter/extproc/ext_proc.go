@@ -68,6 +68,10 @@ func init() {
 			httpfilter.UnregisterForTesting(typeURL)
 		}
 	}
+	internal.RegisterExtProcFilterForTesting = func() func() {
+		iextproc.RegisterForTesting()
+		return iextproc.UnregisterForTesting
+	}
 	iextproc.TimeNowFunc = time.Now
 	iextproc.TimeSinceFunc = time.Since
 }

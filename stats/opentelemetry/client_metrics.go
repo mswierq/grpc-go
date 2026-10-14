@@ -68,12 +68,19 @@ func (h *clientMetricsHandler) initializeMetrics() {
 	rm.registerMetrics(metrics, meter)
 }
 
-// getOrCreateCallInfo returns the existing callInfo from context if present,
-// or creates and attaches a new one.
+// getOrCreateCallInfo returns the existing callInfo from context if present
+// and created for the same ClientConn, or creates and attaches a new one.
+//
+// The callInfo is shared by the metrics and tracing interceptors of a
+// ClientConn. A callInfo created by a different ClientConn is not reused: this
+// happens when an RPC on a child channel (e.g. a channel created by an xDS
+// HTTP filter) is started with the context of an RPC on its parent channel,
+// and the child RPC must be recorded with its own target, method and attempts.
 func getOrCreateCallInfo(ctx context.Context, cc *grpc.ClientConn, method string, opts ...grpc.CallOption) (context.Context, *callInfo) {
 	ci := getCallInfo(ctx)
-	if ci == nil {
+	if ci == nil || ci.cc != cc {
 		ci = &callInfo{
+			cc:     cc,
 			target: cc.CanonicalTarget(),
 			method: determineMethod(method, opts...),
 		}

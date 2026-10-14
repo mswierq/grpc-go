@@ -172,6 +172,9 @@ func ServerOption(o Options) grpc.ServerOption {
 
 // callInfo is information pertaining to the lifespan of the RPC client side.
 type callInfo struct {
+	// cc is the ClientConn on which the RPC was started.
+	cc *grpc.ClientConn
+
 	target string
 
 	method string

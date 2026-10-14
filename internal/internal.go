@@ -186,6 +186,14 @@ var (
 	// other features, including the CSDS service.
 	NewXDSResolverWithClientForTesting any // func(xdsclient.XDSClient) (resolver.Builder, error)
 
+	// RegisterExtProcFilterForTesting registers the xDS external processing
+	// (ext_proc) HTTP filter, regardless of the environment variable guarding
+	// it, and returns a function to unregister it. It is set by the extproc
+	// package and allows tests outside of it to exercise the filter.
+	//
+	// Testing Only
+	RegisterExtProcFilterForTesting func() (unregister func())
+
 	// ORCAAllowAnyMinReportingInterval is for examples/orca use ONLY.
 	ORCAAllowAnyMinReportingInterval any // func(so *orca.ServiceOptions)
 
